@@ -33,7 +33,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install frontend deps
-        run: npm ci
+        run: npm install
 
       - name: Build and publish release
         uses: tauri-apps/tauri-action@v0
