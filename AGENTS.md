@@ -99,4 +99,5 @@ For non-trivial changes, validate:
 - Current default AI model in UI: `google/gemini-3-flash`.
 - API key is currently stored in `localStorage` (`ai_gateway_key`).
 - Global generation task history is available from header **Task History** drawer and persisted to app data JSON (`task_history.json`) via Tauri history commands.
+- Auto-update plumbing is enabled via `tauri-plugin-updater` (manual check button in header); release bundles generate updater artifacts (`bundle.createUpdaterArtifacts=true`).
 - `README.md` is still template text; use this file as the practical repo guide until README is replaced.

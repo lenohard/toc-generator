@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { check } from "@tauri-apps/plugin-updater";
 import { Step1Select } from "./components/Step1Select";
 import { Step2AI } from "./components/Step2AI";
 import { Step3Merge } from "./components/Step3Merge";
@@ -29,6 +30,8 @@ export default function App() {
   const [deps, setDeps] = useState<DepStatus[] | null>(null);
   const [showDepsWarning, setShowDepsWarning] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState("");
 
   const updateState = (partial: Partial<AppState>) => {
     setState((prev) => ({ ...prev, ...partial }));
@@ -55,6 +58,34 @@ export default function App() {
       apiKey: state.apiKey,
     });
     setStep(1);
+  };
+
+  const checkUpdates = async () => {
+    setUpdateBusy(true);
+    setUpdateStatus("Checking updates...");
+    try {
+      const update = await check();
+      if (!update) {
+        setUpdateStatus("Already on latest version");
+        return;
+      }
+
+      const ok = window.confirm(
+        `New version ${update.version} found. Download and install now?`
+      );
+      if (!ok) {
+        setUpdateStatus(`Update ${update.version} available`);
+        return;
+      }
+
+      setUpdateStatus("Downloading update...");
+      await update.downloadAndInstall();
+      setUpdateStatus("Update installed. Please restart app.");
+    } catch (e) {
+      setUpdateStatus(`Update check failed: ${String(e)}`);
+    } finally {
+      setUpdateBusy(false);
+    }
   };
 
   const goToStep = (s: Step) => setStep(s);
@@ -143,6 +174,15 @@ export default function App() {
           <span>Task History</span>
         </button>
 
+        <button
+          onClick={checkUpdates}
+          disabled={updateBusy}
+          className="flex items-center gap-1.5 text-xs text-zinc-300 hover:text-white disabled:opacity-50"
+        >
+          <span>{updateBusy ? "⟳" : "⬆"}</span>
+          <span>{updateBusy ? "Checking..." : "Check Update"}</span>
+        </button>
+
         {/* Deps warning indicator */}
         {deps && deps.some((d) => !d.found) && (
           <button
@@ -154,6 +194,12 @@ export default function App() {
           </button>
         )}
       </div>
+
+      {updateStatus && (
+        <div className="px-4 py-1 text-xs border-b border-zinc-800 bg-zinc-900 text-zinc-400">
+          {updateStatus}
+        </div>
+      )}
 
       {/* Main content */}
       <div className="flex-1 min-h-0">
