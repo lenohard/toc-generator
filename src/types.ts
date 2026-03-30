@@ -56,7 +56,44 @@ export interface MergeOptions {
 
 export interface PageThumbnail {
   page: number;
-  data: string; // base64 PNG
+  data: string;  // base64 image
+  mime: string;  // e.g. "image/png"
+}
+
+export interface AIUsage {
+  promptTokens: number | null;
+  completionTokens: number | null;
+  totalTokens: number | null;
+  costUsd: number | null;
+}
+
+export interface AIRunInfo {
+  at: string;
+  model: string;
+  usage: AIUsage;
+  durationMs: number;
+  success: boolean;
+}
+
+export interface TaskHistoryRecord {
+  id: string;
+  at: string;
+  fileType: "pdf" | "djvu";
+  inputFile: string;
+  outputFile: string;
+  selectedPages: number[];
+  offset: number;
+  ifCover: string;
+  model: string | null;
+  promptTokens: number | null;
+  completionTokens: number | null;
+  totalTokens: number | null;
+  costUsd: number | null;
+  tocCount: number;
+  durationMs: number;
+  success: boolean;
+  error: string | null;
+  logs: string[];
 }
 
 export type Step = 1 | 2 | 3;
@@ -74,4 +111,5 @@ export interface AppState {
   tocEntries: TocEntry[];
   outputFile: string | null;
   apiKey: string; // Vercel AI Gateway key
+  aiRunInfo: AIRunInfo | null;
 }

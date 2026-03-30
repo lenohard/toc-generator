@@ -1,6 +1,8 @@
 pub mod deps;
+pub mod history;
 pub mod merge;
 pub mod ocr;
 pub mod pages;
 pub mod regex_tools;
 pub mod session;
+pub mod system;

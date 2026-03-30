@@ -7,7 +7,8 @@ use std::process::Command;
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PageThumbnail {
     pub page: u32,
-    pub data: String, // base64-encoded PNG
+    pub data: String,  // base64-encoded image
+    pub mime: String,  // "image/png" or "image/x-portable-pixmap"
 }
 
 fn resolve_tool(name: &str) -> String {
@@ -94,13 +95,14 @@ pub async fn render_page_thumbnails(
                 if let Some(path) = png_path {
                     let bytes = fs::read(&path).map_err(|e| e.to_string())?;
                     let b64 = base64_encode(&bytes);
-                    results.push(PageThumbnail { page, data: b64 });
+                    results.push(PageThumbnail { page, data: b64, mime: "image/png".to_string() });
                 }
             }
         }
         "djvu" => {
             let ddjvu = resolve_tool("ddjvu");
             for &page in &pages {
+                let ppm_path = work_dir.join(format!("thumb{:04}.ppm", page));
                 let png_path = work_dir.join(format!("thumb{:04}.png", page));
                 let _ = Command::new(&ddjvu)
                     .args([
@@ -108,15 +110,25 @@ pub async fn render_page_thumbnails(
                         &format!("-page={}", page),
                         "-size=400x600",
                         file_path.as_str(),
-                        png_path.to_str().unwrap(),
+                        ppm_path.to_str().unwrap(),
                     ])
                     .env("PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
                     .output();
 
-                if png_path.exists() {
-                    let bytes = fs::read(&png_path).map_err(|e| e.to_string())?;
+                if ppm_path.exists() {
+                    // Convert PPM → PNG using sips (built-in macOS)
+                    let _ = Command::new("sips")
+                        .args([
+                            "-s", "format", "png",
+                            ppm_path.to_str().unwrap(),
+                            "--out", png_path.to_str().unwrap(),
+                        ])
+                        .output();
+                    let src = if png_path.exists() { &png_path } else { &ppm_path };
+                    let mime = if png_path.exists() { "image/png" } else { "image/x-portable-pixmap" };
+                    let bytes = fs::read(src).map_err(|e| e.to_string())?;
                     let b64 = base64_encode(&bytes);
-                    results.push(PageThumbnail { page, data: b64 });
+                    results.push(PageThumbnail { page, data: b64, mime: mime.to_string() });
                 }
             }
         }
@@ -204,7 +216,7 @@ pub async fn render_pages_for_ai(
                         if name.starts_with(&prefix) && name.ends_with(".png") {
                             let bytes = fs::read(entry.path()).map_err(|e| e.to_string())?;
                             let b64 = base64_encode(&bytes);
-                            results.push(PageThumbnail { page, data: b64 });
+                            results.push(PageThumbnail { page, data: b64, mime: "image/png".to_string() });
                             break;
                         }
                     }
@@ -214,6 +226,7 @@ pub async fn render_pages_for_ai(
         "djvu" => {
             let ddjvu = resolve_tool("ddjvu");
             for &page in &pages {
+                let ppm_path = work_dir.join(format!("aipage{:04}.ppm", page));
                 let png_path = work_dir.join(format!("aipage{:04}.png", page));
                 let _ = Command::new(&ddjvu)
                     .args([
@@ -221,15 +234,24 @@ pub async fn render_pages_for_ai(
                         &format!("-page={}", page),
                         "-size=1200x1800",
                         file_path.as_str(),
-                        png_path.to_str().unwrap(),
+                        ppm_path.to_str().unwrap(),
                     ])
                     .env("PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
                     .output();
 
-                if png_path.exists() {
-                    let bytes = fs::read(&png_path).map_err(|e| e.to_string())?;
+                if ppm_path.exists() {
+                    let _ = Command::new("sips")
+                        .args([
+                            "-s", "format", "png",
+                            ppm_path.to_str().unwrap(),
+                            "--out", png_path.to_str().unwrap(),
+                        ])
+                        .output();
+                    let src = if png_path.exists() { &png_path } else { &ppm_path };
+                    let mime = if png_path.exists() { "image/png" } else { "image/x-portable-pixmap" };
+                    let bytes = fs::read(src).map_err(|e| e.to_string())?;
                     let b64 = base64_encode(&bytes);
-                    results.push(PageThumbnail { page, data: b64 });
+                    results.push(PageThumbnail { page, data: b64, mime: mime.to_string() });
                 }
             }
         }

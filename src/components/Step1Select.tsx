@@ -18,23 +18,40 @@ export function Step1Select({ state, updateState, onNext }: Props) {
   const [loadedUpTo, setLoadedUpTo] = useState(0);
   const [apiKey, setApiKey] = useState(state.apiKey || "");
   const [showApiKey, setShowApiKey] = useState(!state.apiKey);
+  const [previewPage, setPreviewPage] = useState<number | null>(null);
+  const [previewImage, setPreviewImage] = useState<string>("");
+  const [previewLoading, setPreviewLoading] = useState(false);
   const gridRef = useRef<HTMLDivElement>(null);
 
-  // When file changes, get page count
+  // When file changes, create session if needed, then get page count
   useEffect(() => {
     if (!state.filePath || !state.fileType) return;
     setLoadingCount(true);
     setThumbs(new Map());
     setLoadedUpTo(0);
-    invoke<number>("get_page_count", {
-      filePath: state.filePath,
-      fileType: state.fileType,
-    })
+
+    const ensureSession = state.sessionId
+      ? Promise.resolve(state.sessionId)
+      : invoke<string>("create_session").then((id) => {
+          updateState({ sessionId: id });
+          return id;
+        });
+
+    ensureSession
+      .then(() =>
+        invoke<number>("get_page_count", {
+          filePath: state.filePath,
+          fileType: state.fileType,
+        })
+      )
       .then((count) => {
         updateState({ pageCount: count });
         setLoadingCount(false);
       })
-      .catch(() => setLoadingCount(false));
+      .catch((e) => {
+        console.error("get_page_count error:", e);
+        setLoadingCount(false);
+      });
   }, [state.filePath, state.fileType]);
 
   // Load first batch when page count is known
@@ -42,6 +59,18 @@ export function Step1Select({ state, updateState, onNext }: Props) {
     if (!state.pageCount || !state.filePath || !state.fileType) return;
     loadBatch(1, Math.min(BATCH_SIZE, state.pageCount));
   }, [state.pageCount]);
+
+  useEffect(() => {
+    if (previewPage === null) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setPreviewPage(null);
+        setPreviewImage("");
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [previewPage]);
 
   const loadBatch = async (from: number, to: number) => {
     if (!state.filePath || !state.fileType) return;
@@ -58,7 +87,7 @@ export function Step1Select({ state, updateState, onNext }: Props) {
       });
       setThumbs((prev) => {
         const next = new Map(prev);
-        for (const r of results) next.set(r.page, r.data);
+        for (const r of results) next.set(r.page, `data:${r.mime};base64,${r.data}`);
         return next;
       });
       setLoadedUpTo(to);
@@ -120,6 +149,31 @@ export function Step1Select({ state, updateState, onNext }: Props) {
       updateState({ selectedPages: sel.filter((p) => p !== page) });
     } else {
       updateState({ selectedPages: [...sel, page].sort((a, b) => a - b) });
+    }
+  };
+
+  const openPreview = async (page: number) => {
+    const thumb = thumbs.get(page);
+    setPreviewPage(page);
+    setPreviewImage(thumb ?? "");
+
+    if (!state.filePath || !state.fileType || !state.sessionId) return;
+
+    setPreviewLoading(true);
+    try {
+      const [result] = await invoke<PageThumbnail[]>("render_pages_for_ai", {
+        sessionId: state.sessionId,
+        filePath: state.filePath,
+        fileType: state.fileType,
+        pages: [page],
+      });
+      if (result) {
+        setPreviewImage(`data:${result.mime};base64,${result.data}`);
+      }
+    } catch (e) {
+      console.error("render preview failed:", e);
+    } finally {
+      setPreviewLoading(false);
     }
   };
 
@@ -297,7 +351,7 @@ export function Step1Select({ state, updateState, onNext }: Props) {
         <div className="flex items-center justify-between px-4 py-2 border-b border-zinc-800">
           <span className="text-xs text-zinc-500 font-medium">
             {state.pageCount
-              ? `Page Preview — click to select TOC pages`
+              ? `Page Preview — click to select, use 🔍 to enlarge`
               : "Open a file to preview pages"}
           </span>
           {loadingThumbs && (
@@ -335,11 +389,22 @@ export function Step1Select({ state, updateState, onNext }: Props) {
                             : "border-zinc-700 hover:border-zinc-500"
                         }`}
                       >
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openPreview(page);
+                          }}
+                          className="absolute top-2 right-2 z-10 px-2 py-0.5 rounded bg-zinc-900/80 text-zinc-200 text-xs hover:bg-zinc-700"
+                          title={`Preview page ${page}`}
+                        >
+                          🔍
+                        </button>
+
                         {/* Thumbnail */}
                         <div className="bg-zinc-800 aspect-[3/4] flex items-center justify-center">
                           {thumb ? (
                             <img
-                              src={`data:image/png;base64,${thumb}`}
+                              src={thumb}
                               alt={`Page ${page}`}
                               className="w-full h-full object-contain"
                             />
@@ -393,6 +458,52 @@ export function Step1Select({ state, updateState, onNext }: Props) {
           )}
         </div>
       </div>
+
+      {/* Full page preview modal */}
+      {previewPage !== null && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
+          onClick={() => {
+            setPreviewPage(null);
+            setPreviewImage("");
+          }}
+        >
+          <div
+            className="relative max-w-[90vw] max-h-[90vh] bg-zinc-900 border border-zinc-700 rounded-lg overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-700">
+              <span className="text-xs text-zinc-300">Page {previewPage} preview</span>
+              <button
+                onClick={() => {
+                  setPreviewPage(null);
+                  setPreviewImage("");
+                }}
+                className="text-zinc-400 hover:text-zinc-200 text-sm"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="w-[80vw] h-[80vh] bg-zinc-950 flex items-center justify-center">
+              {previewLoading && (
+                <div className="absolute text-xs text-zinc-400 bg-zinc-900/90 px-2 py-1 rounded">
+                  Loading full page...
+                </div>
+              )}
+              {previewImage ? (
+                <img
+                  src={previewImage}
+                  alt={`Full preview page ${previewPage}`}
+                  className="max-w-full max-h-full object-contain"
+                />
+              ) : (
+                <div className="text-zinc-600 text-sm">No preview available</div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

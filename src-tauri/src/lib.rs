@@ -1,6 +1,6 @@
 mod commands;
 
-use commands::{deps, merge, ocr, pages, regex_tools, session};
+use commands::{deps, history, merge, ocr, pages, regex_tools, session, system};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -28,6 +28,11 @@ pub fn run() {
             pages::render_page_thumbnails,
             pages::render_pages_for_ai,
             pages::save_ai_toc,
+            system::open_output_file,
+            system::reveal_output_file,
+            history::append_task_history,
+            history::list_task_history,
+            history::clear_task_history,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

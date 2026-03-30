@@ -2,13 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
-import { open as shellOpen } from "@tauri-apps/plugin-shell";
 import type { AppState, MergeOptions, TocEntry } from "../types";
 
 interface Props {
   state: AppState;
   updateState: (partial: Partial<AppState>) => void;
   onBack: () => void;
+  onStartNewTask: () => void;
 }
 
 interface MergeLogEvent {
@@ -18,7 +18,7 @@ interface MergeLogEvent {
   success: boolean;
 }
 
-export function Step3Merge({ state, updateState, onBack }: Props) {
+export function Step3Merge({ state, updateState, onBack, onStartNewTask }: Props) {
   const [tocEntries, setTocEntries] = useState<TocEntry[]>([]);
   const [tocError, setTocError] = useState("");
   const [outputPath, setOutputPath] = useState("");
@@ -28,7 +28,9 @@ export function Step3Merge({ state, updateState, onBack }: Props) {
   const [logs, setLogs] = useState<string[]>([]);
   const [finalOutput, setFinalOutput] = useState<string | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
-  const unlistenRef = useRef<(() => void) | null>(null);
+  const logsRef = useRef<string[]>([]);
+  const runGuardRef = useRef(false);
+  const runStartedAtRef = useRef<number>(0);
 
   // Auto-generate default output path
   useEffect(() => {
@@ -37,7 +39,7 @@ export function Step3Merge({ state, updateState, onBack }: Props) {
       const ext = state.fileType === "djvu" ? ".djvu" : ".pdf";
       setOutputPath(`${base}_ocr${ext}`);
     }
-  }, [state.filePath]);
+  }, [state.filePath, state.fileType]);
 
   // Load TOC preview
   useEffect(() => {
@@ -52,23 +54,34 @@ export function Step3Merge({ state, updateState, onBack }: Props) {
 
   // Listen for merge logs
   useEffect(() => {
-    const setup = async () => {
-      const unlisten = await listen<MergeLogEvent>("merge-log", (event) => {
-        const { line, done, success, session_id } = event.payload;
-        if (session_id !== state.sessionId) return;
-        setLogs((prev) => [...prev, line]);
-        if (done) {
-          setRunning(false);
-          setDone(success);
-        }
-      });
-      unlistenRef.current = unlisten;
+    let active = true;
+    let unlisten: (() => void) | null = null;
+
+    listen<MergeLogEvent>("merge-log", (event) => {
+      const { line, done, success, session_id } = event.payload;
+      if (session_id !== state.sessionId) return;
+      setLogs((prev) => (prev[prev.length - 1] === line ? prev : [...prev, line]));
+      if (done) {
+        setRunning(false);
+        runGuardRef.current = false;
+        setDone(success);
+      }
+    }).then((off) => {
+      if (!active) {
+        off();
+        return;
+      }
+      unlisten = off;
+    });
+
+    return () => {
+      active = false;
+      unlisten?.();
     };
-    setup();
-    return () => unlistenRef.current?.();
   }, [state.sessionId]);
 
   useEffect(() => {
+    logsRef.current = logs;
     if (logRef.current) {
       logRef.current.scrollTop = logRef.current.scrollHeight;
     }
@@ -87,7 +100,9 @@ export function Step3Merge({ state, updateState, onBack }: Props) {
   };
 
   const runMerge = async () => {
-    if (!state.sessionId || !state.filePath || !outputPath) return;
+    if (!state.sessionId || !state.filePath || !state.fileType || !outputPath || runGuardRef.current) return;
+    runGuardRef.current = true;
+    runStartedAtRef.current = Date.now();
     setRunning(true);
     setDone(false);
     setLogs([]);
@@ -104,20 +119,81 @@ export function Step3Merge({ state, updateState, onBack }: Props) {
       const result = await invoke<string>("run_merge", { opts });
       setFinalOutput(result);
       updateState({ outputFile: result });
+
+      await invoke("append_task_history", {
+        record: {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          at: new Date().toISOString(),
+          fileType: state.fileType,
+          inputFile: state.filePath,
+          outputFile: result,
+          selectedPages: state.selectedPages,
+          offset: state.metadata.offset,
+          ifCover: state.metadata.if_cover,
+          model: state.aiRunInfo?.model ?? null,
+          promptTokens: state.aiRunInfo?.usage.promptTokens ?? null,
+          completionTokens: state.aiRunInfo?.usage.completionTokens ?? null,
+          totalTokens: state.aiRunInfo?.usage.totalTokens ?? null,
+          costUsd: state.aiRunInfo?.usage.costUsd ?? null,
+          tocCount: tocEntries.length,
+          durationMs: Date.now() - runStartedAtRef.current,
+          success: true,
+          error: null,
+          logs: logsRef.current,
+        },
+      });
     } catch (err) {
-      setLogs((prev) => [...prev, `Error: ${err}`]);
+      const msg = String(err);
+      setLogs((prev) => [...prev, `Error: ${msg}`]);
       setRunning(false);
+      runGuardRef.current = false;
+
+      await invoke("append_task_history", {
+        record: {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          at: new Date().toISOString(),
+          fileType: state.fileType,
+          inputFile: state.filePath,
+          outputFile: outputPath,
+          selectedPages: state.selectedPages,
+          offset: state.metadata.offset,
+          ifCover: state.metadata.if_cover,
+          model: state.aiRunInfo?.model ?? null,
+          promptTokens: state.aiRunInfo?.usage.promptTokens ?? null,
+          completionTokens: state.aiRunInfo?.usage.completionTokens ?? null,
+          totalTokens: state.aiRunInfo?.usage.totalTokens ?? null,
+          costUsd: state.aiRunInfo?.usage.costUsd ?? null,
+          tocCount: tocEntries.length,
+          durationMs: Date.now() - runStartedAtRef.current,
+          success: false,
+          error: msg,
+          logs: [...logsRef.current, `Error: ${msg}`],
+        },
+      }).catch(() => undefined);
     }
   };
 
   const openFile = async () => {
-    if (finalOutput) {
-      await shellOpen(finalOutput);
+    if (!finalOutput) return;
+    try {
+      await invoke("open_output_file", { path: finalOutput });
+    } catch (err) {
+      setLogs((prev) => [...prev, `Error opening file: ${err}`]);
+    }
+  };
+
+  const revealFile = async () => {
+    if (!finalOutput) return;
+    try {
+      await invoke("reveal_output_file", { path: finalOutput });
+    } catch (err) {
+      setLogs((prev) => [...prev, `Error revealing file: ${err}`]);
     }
   };
 
   // Indent based on level
   const levelIndent = (level: number) => (level - 1) * 16;
+  const fileLabel = state.fileType === "djvu" ? "DjVu" : "PDF";
 
   return (
     <div className="flex h-full">
@@ -147,7 +223,7 @@ export function Step3Merge({ state, updateState, onBack }: Props) {
               <thead className="sticky top-0 bg-zinc-900">
                 <tr className="text-zinc-500">
                   <th className="text-left px-4 py-2">Title</th>
-                  <th className="text-right px-4 py-2 w-20">PDF Page</th>
+                  <th className="text-right px-4 py-2 w-20">{fileLabel} Page</th>
                   <th className="text-right px-4 py-2 w-16">Printed</th>
                 </tr>
               </thead>
@@ -239,7 +315,7 @@ export function Step3Merge({ state, updateState, onBack }: Props) {
               </span>
             </label>
             <p className="text-xs text-zinc-600 mt-1 ml-11">
-              Prepend original PDF bookmarks before new TOC
+              Prepend original {fileLabel} bookmarks before new TOC
             </p>
           </div>
 
@@ -302,7 +378,7 @@ export function Step3Merge({ state, updateState, onBack }: Props) {
             <div className="space-y-2">
               <div className="bg-green-950 border border-green-800 rounded-lg p-3">
                 <p className="text-xs text-green-400 font-medium mb-1">
-                  ✓ PDF generated successfully
+                  ✓ {fileLabel} generated successfully
                 </p>
                 <p className="text-xs text-green-700 break-all font-mono">
                   {finalOutput.split("/").pop()}
@@ -313,20 +389,21 @@ export function Step3Merge({ state, updateState, onBack }: Props) {
                   onClick={openFile}
                   className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-xs text-white transition-colors"
                 >
-                  Open PDF
+                  Open {fileLabel}
                 </button>
                 <button
-                  onClick={async () => {
-                    if (finalOutput) {
-                      const dir = finalOutput.substring(0, finalOutput.lastIndexOf("/"));
-                      await shellOpen(dir);
-                    }
-                  }}
+                  onClick={revealFile}
                   className="flex-1 py-2 bg-zinc-700 hover:bg-zinc-600 rounded-lg text-xs text-zinc-300 transition-colors"
                 >
                   Show in Finder
                 </button>
               </div>
+              <button
+                onClick={onStartNewTask}
+                className="w-full py-2 bg-green-700 hover:bg-green-600 rounded-lg text-xs font-medium text-white transition-colors"
+              >
+                Start New Task
+              </button>
             </div>
           )}
         </div>
@@ -350,7 +427,7 @@ export function Step3Merge({ state, updateState, onBack }: Props) {
                 <span className="animate-spin">⟳</span> Merging...
               </>
             ) : (
-              "⚡ Generate PDF"
+              `⚡ Generate ${fileLabel}`
             )}
           </button>
         </div>

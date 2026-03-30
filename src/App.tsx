@@ -4,6 +4,7 @@ import { Step1Select } from "./components/Step1Select";
 import { Step2AI } from "./components/Step2AI";
 import { Step3Merge } from "./components/Step3Merge";
 import { DepsWarning } from "./components/DepsWarning";
+import { TaskHistoryDrawer } from "./components/TaskHistoryDrawer";
 import type { AppState, DepStatus, Step } from "./types";
 
 const initialState: AppState = {
@@ -19,6 +20,7 @@ const initialState: AppState = {
   tocEntries: [],
   outputFile: null,
   apiKey: localStorage.getItem("ai_gateway_key") || "",
+  aiRunInfo: null,
 };
 
 export default function App() {
@@ -26,6 +28,11 @@ export default function App() {
   const [state, setState] = useState<AppState>(initialState);
   const [deps, setDeps] = useState<DepStatus[] | null>(null);
   const [showDepsWarning, setShowDepsWarning] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+
+  const updateState = (partial: Partial<AppState>) => {
+    setState((prev) => ({ ...prev, ...partial }));
+  };
 
   useEffect(() => {
     // Create session
@@ -40,8 +47,14 @@ export default function App() {
     });
   }, []);
 
-  const updateState = (partial: Partial<AppState>) => {
-    setState((prev) => ({ ...prev, ...partial }));
+  const startNewTask = async () => {
+    const newSessionId = await invoke<string>("create_session");
+    setState({
+      ...initialState,
+      sessionId: newSessionId,
+      apiKey: state.apiKey,
+    });
+    setStep(1);
   };
 
   const goToStep = (s: Step) => setStep(s);
@@ -122,11 +135,19 @@ export default function App() {
           ))}
         </div>
 
+        <button
+          onClick={() => setShowHistory(true)}
+          className="ml-auto flex items-center gap-1.5 text-xs text-zinc-300 hover:text-white"
+        >
+          <span>🕘</span>
+          <span>Task History</span>
+        </button>
+
         {/* Deps warning indicator */}
         {deps && deps.some((d) => !d.found) && (
           <button
             onClick={() => setShowDepsWarning(true)}
-            className="ml-auto flex items-center gap-1.5 text-xs text-amber-400 hover:text-amber-300"
+            className="flex items-center gap-1.5 text-xs text-amber-400 hover:text-amber-300"
           >
             <span>⚠</span>
             <span>Missing tools</span>
@@ -156,17 +177,17 @@ export default function App() {
             state={state}
             updateState={updateState}
             onBack={() => goToStep(2)}
+            onStartNewTask={startNewTask}
           />
         )}
       </div>
 
       {/* Deps warning modal */}
       {showDepsWarning && deps && (
-        <DepsWarning
-          deps={deps}
-          onClose={() => setShowDepsWarning(false)}
-        />
+        <DepsWarning deps={deps} onClose={() => setShowDepsWarning(false)} />
       )}
+
+      <TaskHistoryDrawer open={showHistory} onClose={() => setShowHistory(false)} />
     </div>
   );
 }
