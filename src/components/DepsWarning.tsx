@@ -1,13 +1,50 @@
+import { useMemo, useState } from "react";
 import type { DepStatus } from "../types";
 
 interface Props {
   deps: DepStatus[];
   onClose: () => void;
+  onRecheck: () => Promise<void>;
 }
 
-export function DepsWarning({ deps, onClose }: Props) {
+export function DepsWarning({ deps, onClose, onRecheck }: Props) {
+  const [copied, setCopied] = useState(false);
+  const [checking, setChecking] = useState(false);
   const missing = deps.filter((d) => !d.found);
   const found = deps.filter((d) => d.found);
+
+  const installCommand = useMemo(() => {
+    const pkgList = missing
+      .map((d) => {
+        if (d.name === "ddjvu" || d.name === "djvused") return "djvulibre";
+        if (d.name === "pdftoppm" || d.name === "pdftotext") return "poppler";
+        if (d.name === "pdftk") return "pdftk-java";
+        return d.name;
+      })
+      .filter((v, i, a) => a.indexOf(v) === i)
+      .join(" ");
+
+    return `brew install ${pkgList}`;
+  }, [missing]);
+
+  const copyCommand = async () => {
+    try {
+      await navigator.clipboard.writeText(installCommand);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1400);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  const recheck = async () => {
+    setChecking(true);
+    try {
+      await onRecheck();
+    } finally {
+      setChecking(false);
+    }
+  };
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
@@ -31,19 +68,23 @@ export function DepsWarning({ deps, onClose }: Props) {
               <p className="text-sm text-amber-400 mb-3">
                 The following tools are missing. Install via Homebrew:
               </p>
-              <div className="bg-zinc-950 rounded-lg p-3 font-mono text-xs text-green-400 mb-3">
-                brew install{" "}
-                {missing
-                  .map((d) => {
-                    if (d.name === "ddjvu" || d.name === "djvused")
-                      return "djvulibre";
-                    if (d.name === "pdftoppm" || d.name === "pdftotext")
-                      return "poppler";
-                    if (d.name === "pdftk") return "pdftk-java";
-                    return d.name;
-                  })
-                  .filter((v, i, a) => a.indexOf(v) === i)
-                  .join(" ")}
+              <div className="bg-zinc-950 rounded-lg p-3 mb-3">
+                <div className="font-mono text-xs text-green-400 break-all select-text">{installCommand}</div>
+                <div className="mt-2 flex items-center gap-2">
+                  <button
+                    onClick={copyCommand}
+                    className="px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-xs text-zinc-300"
+                  >
+                    {copied ? "Copied" : "Copy command"}
+                  </button>
+                  <button
+                    onClick={recheck}
+                    disabled={checking}
+                    className="px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-xs text-zinc-300"
+                  >
+                    {checking ? "Checking..." : "Recheck"}
+                  </button>
+                </div>
               </div>
               <div className="space-y-2">
                 {missing.map((d) => (

@@ -5,6 +5,7 @@ import type { TaskHistoryRecord } from "../types";
 interface Props {
   open: boolean;
   onClose: () => void;
+  onLoadTask: (r: TaskHistoryRecord) => void;
 }
 
 function formatCost(cost: number | null): string {
@@ -13,7 +14,7 @@ function formatCost(cost: number | null): string {
   return `$${cost.toFixed(6)}`;
 }
 
-export function TaskHistoryDrawer({ open, onClose }: Props) {
+export function TaskHistoryDrawer({ open, onClose, onLoadTask }: Props) {
   const [rows, setRows] = useState<TaskHistoryRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -99,8 +100,18 @@ export function TaskHistoryDrawer({ open, onClose }: Props) {
               </div>
 
               <div className="mt-2 text-zinc-500 break-all">In: {r.inputFile}</div>
-              <div className="text-zinc-500 break-all">Out: {r.outputFile}</div>
-              {r.error && <div className="mt-1 text-red-400 break-all">Error: {r.error}</div>}
+              <div className="text-zinc-500 break-all mb-2">Out: {r.outputFile}</div>
+              
+              <div className="flex items-center gap-2 pt-2 border-t border-zinc-700/50">
+                <button
+                  onClick={() => onLoadTask(r)}
+                  className="px-3 py-1 bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 border border-indigo-500/30 rounded text-xs font-medium transition-colors"
+                >
+                  Load into current session
+                </button>
+              </div>
+
+              {r.error && <div className="mt-2 text-red-400 break-all">Error: {r.error}</div>}
 
               {r.logs?.length > 0 && (
                 <details className="mt-2">

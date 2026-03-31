@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { check } from "@tauri-apps/plugin-updater";
 import { Step1Select } from "./components/Step1Select";
@@ -6,7 +6,7 @@ import { Step2AI } from "./components/Step2AI";
 import { Step3Merge } from "./components/Step3Merge";
 import { DepsWarning } from "./components/DepsWarning";
 import { TaskHistoryDrawer } from "./components/TaskHistoryDrawer";
-import type { AppState, DepStatus, Step } from "./types";
+import type { AppState, DepStatus, Step, TaskHistoryRecord } from "./types";
 
 const initialState: AppState = {
   sessionId: null,
@@ -37,18 +37,26 @@ export default function App() {
     setState((prev) => ({ ...prev, ...partial }));
   };
 
+  const refreshDeps = useCallback(async (openWarningIfMissing = true) => {
+    const d = await invoke<DepStatus[]>("check_deps");
+    setDeps(d);
+    const hasMissing = d.some((dep) => !dep.found);
+    if (openWarningIfMissing && hasMissing) {
+      setShowDepsWarning(true);
+    }
+    if (!hasMissing) {
+      setShowDepsWarning(false);
+    }
+  }, []);
+
   useEffect(() => {
     // Create session
     invoke<string>("create_session").then((id) => {
       updateState({ sessionId: id });
     });
-    // Check deps
-    invoke<DepStatus[]>("check_deps").then((d) => {
-      setDeps(d);
-      const missing = d.filter((dep) => !dep.found);
-      if (missing.length > 0) setShowDepsWarning(true);
-    });
-  }, []);
+
+    refreshDeps(true).catch(() => undefined);
+  }, [refreshDeps]);
 
   const startNewTask = async () => {
     const newSessionId = await invoke<string>("create_session");
@@ -58,6 +66,32 @@ export default function App() {
       apiKey: state.apiKey,
     });
     setStep(1);
+  };
+
+  const loadTask = async (r: TaskHistoryRecord) => {
+    const newSessionId = await invoke<string>("create_session");
+    const tocEntries = r.tocEntries || [];
+    setState({
+      ...initialState,
+      sessionId: newSessionId,
+      apiKey: state.apiKey,
+      filePath: r.inputFile,
+      fileType: r.fileType,
+      selectedPages: r.selectedPages,
+      metadata: { offset: r.offset, if_cover: r.ifCover || "0" },
+      outputFile: r.outputFile,
+      tocEntries,
+      aiDone: tocEntries.length > 0,
+    });
+    // Persist TOC data into the new session so preview_toc / run_merge can use it
+    if (tocEntries.length > 0) {
+      await invoke("save_ai_toc", {
+        sessionId: newSessionId,
+        entriesJson: JSON.stringify(tocEntries),
+      });
+    }
+    setStep(1);
+    setShowHistory(false);
   };
 
   const checkUpdates = async () => {
@@ -230,10 +264,18 @@ export default function App() {
 
       {/* Deps warning modal */}
       {showDepsWarning && deps && (
-        <DepsWarning deps={deps} onClose={() => setShowDepsWarning(false)} />
+        <DepsWarning
+          deps={deps}
+          onClose={() => setShowDepsWarning(false)}
+          onRecheck={() => refreshDeps(false)}
+        />
       )}
 
-      <TaskHistoryDrawer open={showHistory} onClose={() => setShowHistory(false)} />
+      <TaskHistoryDrawer 
+        open={showHistory} 
+        onClose={() => setShowHistory(false)} 
+        onLoadTask={loadTask}
+      />
     </div>
   );
 }

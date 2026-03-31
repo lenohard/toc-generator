@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
-import type { AppState, MergeOptions, TocEntry } from "../types";
+import type { AppState, MergeOptions, PageThumbnail, TocEntry } from "../types";
 
 interface Props {
   state: AppState;
@@ -31,6 +31,9 @@ export function Step3Merge({ state, updateState, onBack, onStartNewTask }: Props
   const logsRef = useRef<string[]>([]);
   const runGuardRef = useRef(false);
   const runStartedAtRef = useRef<number>(0);
+  const [previewPage, setPreviewPage] = useState<number | null>(null);
+  const [previewImage, setPreviewImage] = useState<string>("");
+  const [previewLoading, setPreviewLoading] = useState(false);
 
   // Auto-generate default output path
   useEffect(() => {
@@ -87,6 +90,18 @@ export function Step3Merge({ state, updateState, onBack, onStartNewTask }: Props
     }
   }, [logs]);
 
+  useEffect(() => {
+    if (previewPage === null) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setPreviewPage(null);
+        setPreviewImage("");
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [previewPage]);
+
   const pickOutputPath = async () => {
     const selected = await save({
       defaultPath: outputPath,
@@ -136,6 +151,7 @@ export function Step3Merge({ state, updateState, onBack, onStartNewTask }: Props
           totalTokens: state.aiRunInfo?.usage.totalTokens ?? null,
           costUsd: state.aiRunInfo?.usage.costUsd ?? null,
           tocCount: tocEntries.length,
+          tocEntries: state.tocEntries,
           durationMs: Date.now() - runStartedAtRef.current,
           success: true,
           error: null,
@@ -164,12 +180,37 @@ export function Step3Merge({ state, updateState, onBack, onStartNewTask }: Props
           totalTokens: state.aiRunInfo?.usage.totalTokens ?? null,
           costUsd: state.aiRunInfo?.usage.costUsd ?? null,
           tocCount: tocEntries.length,
+          tocEntries: state.tocEntries,
           durationMs: Date.now() - runStartedAtRef.current,
           success: false,
           error: msg,
           logs: [...logsRef.current, `Error: ${msg}`],
         },
       }).catch(() => undefined);
+    }
+  };
+
+  const openEntryPreview = async (page: number) => {
+    if (!state.sessionId || !state.filePath || !state.fileType || !page || page < 1) return;
+
+    setPreviewPage(page);
+    setPreviewImage("");
+    setPreviewLoading(true);
+
+    try {
+      const [result] = await invoke<PageThumbnail[]>("render_pages_for_ai", {
+        sessionId: state.sessionId,
+        filePath: state.filePath,
+        fileType: state.fileType,
+        pages: [page],
+      });
+      if (result) {
+        setPreviewImage(`data:${result.mime};base64,${result.data}`);
+      }
+    } catch (e) {
+      setLogs((prev) => [...prev, `Preview error (page ${page}): ${String(e)}`]);
+    } finally {
+      setPreviewLoading(false);
     }
   };
 
@@ -201,7 +242,7 @@ export function Step3Merge({ state, updateState, onBack, onStartNewTask }: Props
       <div className="flex-1 flex flex-col border-r border-zinc-800">
         <div className="flex items-center justify-between px-4 py-2 border-b border-zinc-800 bg-zinc-900">
           <span className="text-xs font-medium text-zinc-500">
-            TOC Preview
+            TOC Preview (click an entry to open that page)
           </span>
           {tocEntries.length > 0 && (
             <span className="text-xs text-zinc-600">
@@ -231,9 +272,11 @@ export function Step3Merge({ state, updateState, onBack, onStartNewTask }: Props
                 {tocEntries.map((entry, i) => (
                   <tr
                     key={i}
-                    className={`border-t border-zinc-800/50 hover:bg-zinc-800/20 ${
+                    onClick={() => openEntryPreview(entry.page)}
+                    className={`border-t border-zinc-800/50 hover:bg-zinc-800/20 cursor-pointer ${
                       entry.level === 1 ? "" : ""
                     }`}
+                    title={`Open page ${entry.page} for quick verification`}
                   >
                     <td
                       className="px-4 py-1.5 text-zinc-300"
@@ -432,6 +475,52 @@ export function Step3Merge({ state, updateState, onBack, onStartNewTask }: Props
           </button>
         </div>
       </div>
+
+      {/* TOC entry page preview modal */}
+      {previewPage !== null && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
+          onClick={() => {
+            setPreviewPage(null);
+            setPreviewImage("");
+          }}
+        >
+          <div
+            className="relative max-w-[90vw] max-h-[90vh] bg-zinc-900 border border-zinc-700 rounded-lg overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-700">
+              <span className="text-xs text-zinc-300">Page {previewPage} preview</span>
+              <button
+                onClick={() => {
+                  setPreviewPage(null);
+                  setPreviewImage("");
+                }}
+                className="text-zinc-400 hover:text-zinc-200 text-sm"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="w-[80vw] h-[80vh] bg-zinc-950 flex items-center justify-center">
+              {previewLoading && (
+                <div className="absolute text-xs text-zinc-400 bg-zinc-900/90 px-2 py-1 rounded">
+                  Loading page image...
+                </div>
+              )}
+              {previewImage ? (
+                <img
+                  src={previewImage}
+                  alt={`Entry preview page ${previewPage}`}
+                  className="max-w-full max-h-full object-contain"
+                />
+              ) : (
+                !previewLoading && <div className="text-zinc-600 text-sm">No preview available</div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

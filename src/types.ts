@@ -90,6 +90,7 @@ export interface TaskHistoryRecord {
   totalTokens: number | null;
   costUsd: number | null;
   tocCount: number;
+  tocEntries?: TocEntry[];
   durationMs: number;
   success: boolean;
   error: string | null;

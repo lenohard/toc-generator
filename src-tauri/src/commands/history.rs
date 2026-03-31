@@ -22,6 +22,8 @@ pub struct TaskHistoryRecord {
     pub total_tokens: Option<i64>,
     pub cost_usd: Option<f64>,
     pub toc_count: usize,
+    #[serde(default)]
+    pub toc_entries: Option<Vec<serde_json::Value>>,
     pub duration_ms: u64,
     pub success: bool,
     pub error: Option<String>,
