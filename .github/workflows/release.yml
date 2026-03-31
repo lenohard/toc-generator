@@ -15,7 +15,7 @@ jobs:
       matrix:
         include:
           - platform: macos-latest
-            args: "--bundles dmg"
+            args: ""
 
     runs-on: ${{ matrix.platform }}
 

@@ -94,6 +94,10 @@ For non-trivial changes, validate:
 5. Output file is generated and can be opened.
 6. Existing bookmark merge option still works for PDF.
 
+## Credentials & Tokens
+
+- **GitHub token**: configured in `.envrc` (auto-loaded by direnv). Use `$GITHUB_TOKEN` directly in shell/curl for GitHub repo management (releases, PRs, etc.) — no manual setup needed.
+
 ## Notes
 
 - Current default AI model in UI: `google/gemini-3-flash`.
