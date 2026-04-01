@@ -23,6 +23,7 @@ export function Step3Merge({ state, updateState, onBack, onStartNewTask }: Props
   const [tocError, setTocError] = useState("");
   const [outputPath, setOutputPath] = useState("");
   const [mergeOriginal, setMergeOriginal] = useState(false);
+  const [deleteOriginal, setDeleteOriginal] = useState(true);
   const [running, setRunning] = useState(false);
   const [done, setDone] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
@@ -135,6 +136,16 @@ export function Step3Merge({ state, updateState, onBack, onStartNewTask }: Props
       setFinalOutput(result);
       updateState({ outputFile: result });
 
+      // Delete original if requested
+      if (deleteOriginal && state.filePath && result !== state.filePath) {
+        try {
+          await invoke("delete_file", { path: state.filePath });
+          setLogs((prev) => [...prev, `✓ Original file deleted`]);
+        } catch (e) {
+          setLogs((prev) => [...prev, `Warning: could not delete original: ${String(e)}`]);
+        }
+      }
+
       await invoke("append_task_history", {
         record: {
           id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -235,6 +246,9 @@ export function Step3Merge({ state, updateState, onBack, onStartNewTask }: Props
   // Indent based on level
   const levelIndent = (level: number) => (level - 1) * 16;
   const fileLabel = state.fileType === "djvu" ? "DjVu" : "PDF";
+  // Hide the "Printed" column when all entries have no meaningful raw_page
+  // (e.g. loaded from existing bookmarks where raw_page === String(page))
+  const showPrintedCol = tocEntries.some((e) => e.raw_page && e.raw_page !== String(e.page));
 
   return (
     <div className="flex h-full">
@@ -265,7 +279,7 @@ export function Step3Merge({ state, updateState, onBack, onStartNewTask }: Props
                 <tr className="text-zinc-500">
                   <th className="text-left px-4 py-2">Title</th>
                   <th className="text-right px-4 py-2 w-20">{fileLabel} Page</th>
-                  <th className="text-right px-4 py-2 w-16">Printed</th>
+                  {showPrintedCol && <th className="text-right px-4 py-2 w-16">Printed</th>}
                 </tr>
               </thead>
               <tbody>
@@ -298,9 +312,11 @@ export function Step3Merge({ state, updateState, onBack, onStartNewTask }: Props
                     <td className="px-4 py-1.5 text-right font-mono text-indigo-400">
                       {entry.page}
                     </td>
-                    <td className="px-4 py-1.5 text-right font-mono text-zinc-600">
-                      {entry.raw_page}
-                    </td>
+                    {showPrintedCol && (
+                      <td className="px-4 py-1.5 text-right font-mono text-zinc-600">
+                        {entry.raw_page}
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -339,27 +355,52 @@ export function Step3Merge({ state, updateState, onBack, onStartNewTask }: Props
           </div>
 
           {/* Options */}
-          <div>
-            <label className="flex items-center gap-2.5 cursor-pointer">
-              <div
-                onClick={() => setMergeOriginal(!mergeOriginal)}
-                className={`w-9 h-5 rounded-full transition-colors relative ${
-                  mergeOriginal ? "bg-indigo-600" : "bg-zinc-700"
-                }`}
-              >
+          <div className="space-y-3">
+            <div>
+              <label className="flex items-center gap-2.5 cursor-pointer">
                 <div
-                  className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${
-                    mergeOriginal ? "translate-x-4" : "translate-x-0.5"
+                  onClick={() => setDeleteOriginal(!deleteOriginal)}
+                  className={`w-9 h-5 rounded-full transition-colors relative flex-shrink-0 ${
+                    deleteOriginal ? "bg-red-700" : "bg-zinc-700"
                   }`}
-                />
-              </div>
-              <span className="text-xs text-zinc-300">
-                Keep existing bookmarks
-              </span>
-            </label>
-            <p className="text-xs text-zinc-600 mt-1 ml-11">
-              Prepend original {fileLabel} bookmarks before new TOC
-            </p>
+                >
+                  <div
+                    className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${
+                      deleteOriginal ? "translate-x-4" : "translate-x-0.5"
+                    }`}
+                  />
+                </div>
+                <span className="text-xs text-zinc-300">
+                  Delete original file
+                </span>
+              </label>
+              <p className="text-xs text-zinc-600 mt-1 ml-11">
+                Remove source file after successful merge
+              </p>
+            </div>
+
+            <div>
+              <label className="flex items-center gap-2.5 cursor-pointer">
+                <div
+                  onClick={() => setMergeOriginal(!mergeOriginal)}
+                  className={`w-9 h-5 rounded-full transition-colors relative flex-shrink-0 ${
+                    mergeOriginal ? "bg-indigo-600" : "bg-zinc-700"
+                  }`}
+                >
+                  <div
+                    className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${
+                      mergeOriginal ? "translate-x-4" : "translate-x-0.5"
+                    }`}
+                  />
+                </div>
+                <span className="text-xs text-zinc-300">
+                  Keep existing bookmarks
+                </span>
+              </label>
+              <p className="text-xs text-zinc-600 mt-1 ml-11">
+                Prepend original {fileLabel} bookmarks before new TOC
+              </p>
+            </div>
           </div>
 
           {/* Summary */}

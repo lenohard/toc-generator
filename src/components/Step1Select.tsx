@@ -1,18 +1,22 @@
 import { useEffect, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import type { AppState, PageThumbnail } from "../types";
+import type { AppState, ExistingTocEntry, PageThumbnail, TocEntry } from "../types";
 
 interface Props {
   state: AppState;
   updateState: (partial: Partial<AppState>) => void;
   onNext: () => void;
+  onEditExisting: (entries: TocEntry[]) => void;
 }
 
 const BATCH_SIZE = 6; // load thumbnails in batches
 
-export function Step1Select({ state, updateState, onNext }: Props) {
+export function Step1Select({ state, updateState, onNext, onEditExisting }: Props) {
   const [loadingCount, setLoadingCount] = useState(false);
+  const [existingToc, setExistingToc] = useState<ExistingTocEntry[]>([]);
+  const [existingTocLoading, setExistingTocLoading] = useState(false);
+  const [showExistingToc, setShowExistingToc] = useState(false);
   const [loadingThumbs, setLoadingThumbs] = useState(false);
   const [thumbs, setThumbs] = useState<Map<number, string>>(new Map());
   const [loadedUpTo, setLoadedUpTo] = useState(0);
@@ -52,6 +56,28 @@ export function Step1Select({ state, updateState, onNext }: Props) {
         console.error("get_page_count error:", e);
         setLoadingCount(false);
       });
+  }, [state.filePath, state.fileType]);
+
+  // Detect existing bookmarks when a file is loaded
+  useEffect(() => {
+    if (!state.filePath || !state.fileType) {
+      setExistingToc([]);
+      setShowExistingToc(false);
+      return;
+    }
+    setExistingTocLoading(true);
+    setExistingToc([]);
+    setShowExistingToc(false);
+    invoke<ExistingTocEntry[]>("read_existing_toc", {
+      filePath: state.filePath,
+      fileType: state.fileType,
+    })
+      .then((entries) => {
+        setExistingToc(entries);
+        if (entries.length > 0) setShowExistingToc(true);
+      })
+      .catch(() => { /* silent - old files may fail */ })
+      .finally(() => setExistingTocLoading(false));
   }, [state.filePath, state.fileType]);
 
   // Load first batch when page count is known
@@ -234,6 +260,45 @@ export function Step1Select({ state, updateState, onNext }: Props) {
               )}
             </div>
           </div>
+
+          {/* Existing bookmarks banner */}
+          {existingTocLoading && (
+            <div className="mb-4 text-xs text-zinc-600 animate-pulse">Checking for existing bookmarks...</div>
+          )}
+          {showExistingToc && existingToc.length > 0 && (
+            <div className="mb-5 rounded-xl border border-amber-700/50 bg-amber-950/30 p-3">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <div className="text-xs font-semibold text-amber-400 mb-1">📑 Existing bookmarks found</div>
+                  <div className="text-xs text-amber-700">{existingToc.length} entries already in this file</div>
+                </div>
+                <button
+                  onClick={() => setShowExistingToc(false)}
+                  className="text-amber-800 hover:text-amber-600 text-sm leading-none flex-shrink-0"
+                >
+                  ×
+                </button>
+              </div>
+              <button
+                onClick={() => {
+                  const entries: TocEntry[] = existingToc.map((e, i) => ({
+                    title: e.title,
+                    page: e.page,
+                    raw_page: String(e.page),
+                    level: e.level,
+                    source_line: i,
+                  }));
+                  onEditExisting(entries);
+                }}
+                className="mt-2.5 w-full py-1.5 bg-amber-700 hover:bg-amber-600 rounded-lg text-xs font-semibold text-white transition-colors"
+              >
+                ✎ Edit existing bookmarks directly →
+              </button>
+              <p className="text-xs text-amber-900 mt-1.5">
+                Skips AI extraction — loads current TOC straight into merge step.
+              </p>
+            </div>
+          )}
 
           {/* Selected pages summary */}
           {state.selectedPages.length > 0 && (

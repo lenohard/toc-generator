@@ -64,12 +64,17 @@ pub fn build_toc(session_id: &str) -> Result<Vec<TocEntry>, String> {
         let if_cover: i32 = meta.if_cover.parse().unwrap_or(0);
 
         for entry in &mut entries {
-            let raw = entry.raw_page.parse::<i32>().unwrap_or(entry.page);
-            entry.page = if if_cover > 0 && raw > 0 {
-                raw + offset + if_cover - 1
+            if let Ok(raw) = entry.raw_page.parse::<i32>() {
+                entry.page = if if_cover > 0 && raw > 0 {
+                    raw + offset + if_cover - 1
+                } else {
+                    raw + offset
+                };
             } else {
-                raw + offset
-            };
+                // Non-numeric printed page (e.g. roman numeral): frontend-resolved page is already
+                // the final PDF page index and must not have offset/cover applied again.
+                entry.page = entry.page.max(0);
+            }
         }
 
         return Ok(entries);

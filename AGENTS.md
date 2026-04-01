@@ -105,3 +105,7 @@ For non-trivial changes, validate:
 - Global generation task history is available from header **Task History** drawer and persisted to app data JSON (`task_history.json`) via Tauri history commands.
 - Auto-update plumbing is enabled via `tauri-plugin-updater` (manual check button in header); release bundles generate updater artifacts (`bundle.createUpdaterArtifacts=true`).
 - `README.md` is still template text; use this file as the practical repo guide until README is replaced.
+- In Step 2 AI extraction, `TocEntry.raw_page` must preserve the printed TOC page label exactly as extracted (including roman numerals like `iv`, `xii`). `TocEntry.page` is used as a numeric working value: for numeric printed pages it represents the logical parsed number before offset, while for non-numeric printed pages resolved by the user it represents the final PDF page index.
+- Step 2 should display both the printed page label and the actual merge target PDF page. The displayed PDF page for numeric printed pages must be computed from metadata using the same offset/cover logic as merge preview; for non-numeric printed pages, use the user-resolved final PDF page directly.
+- Step 3 / merge logic must not apply offset twice to non-numeric printed pages. If `raw_page` is non-numeric, treat stored `page` as the final PDF page index.
+- The Step 2 page inspector should use high-resolution rendering (`render_pages_for_ai`) rather than low-resolution thumbnails so the side panel remains sharp when resized.

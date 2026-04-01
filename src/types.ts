@@ -39,6 +39,12 @@ export interface SessionMetadata {
   if_cover: string;
 }
 
+export interface ExistingTocEntry {
+  title: string;
+  page: number;
+  level: number;
+}
+
 export interface TocEntry {
   title: string;
   page: number;

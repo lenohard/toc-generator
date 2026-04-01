@@ -31,6 +31,8 @@ pub fn run() {
             pages::save_ai_toc,
             system::open_output_file,
             system::reveal_output_file,
+            system::read_existing_toc,
+            system::delete_file,
             history::append_task_history,
             history::list_task_history,
             history::clear_task_history,

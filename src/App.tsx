@@ -6,7 +6,7 @@ import { Step2AI } from "./components/Step2AI";
 import { Step3Merge } from "./components/Step3Merge";
 import { DepsWarning } from "./components/DepsWarning";
 import { TaskHistoryDrawer } from "./components/TaskHistoryDrawer";
-import type { AppState, DepStatus, Step, TaskHistoryRecord } from "./types";
+import type { AppState, DepStatus, Step, TaskHistoryRecord, TocEntry } from "./types";
 
 const initialState: AppState = {
   sessionId: null,
@@ -57,6 +57,16 @@ export default function App() {
 
     refreshDeps(true).catch(() => undefined);
   }, [refreshDeps]);
+
+  const editExistingToc = async (entries: TocEntry[]) => {
+    if (!state.sessionId) return;
+    await invoke("save_ai_toc", {
+      sessionId: state.sessionId,
+      entriesJson: JSON.stringify(entries),
+    });
+    updateState({ tocEntries: entries, aiDone: true });
+    setStep(3);
+  };
 
   const startNewTask = async () => {
     const newSessionId = await invoke<string>("create_session");
@@ -242,6 +252,7 @@ export default function App() {
             state={state}
             updateState={updateState}
             onNext={() => goToStep(2)}
+            onEditExisting={editExistingToc}
           />
         )}
         {step === 2 && (
