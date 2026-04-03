@@ -772,19 +772,36 @@ export function Step2AI({ state, updateState, onNext, onBack }: Props) {
     const current = entries[inspectorEntryIdx];
     if (!current) return;
 
-    const oldDisplayed = computeDisplayedPdfPage(current);
-    const delta = pickedPage - oldDisplayed;
-
     const updated = [...entries];
     updated[inspectorEntryIdx] = { ...updated[inspectorEntryIdx], page: pickedPage };
 
-    if (delta !== 0) {
-      for (let i = inspectorEntryIdx + 1; i < updated.length; i += 1) {
-        const item = updated[i];
-        const shown = computeDisplayedPdfPage(item);
-        if (shown <= 0) continue;
-        updated[i] = { ...item, page: Math.max(1, shown + delta) };
+    const currentRaw = parseRawNumericPage(current.raw_page);
+    if (currentRaw === null) {
+      // Fallback: for non-numeric printed page, keep legacy delta based on displayed page.
+      const oldDisplayed = computeDisplayedPdfPage(current);
+      const delta = pickedPage - oldDisplayed;
+      if (delta !== 0) {
+        for (let i = inspectorEntryIdx + 1; i < updated.length; i += 1) {
+          const item = updated[i];
+          const shown = computeDisplayedPdfPage(item);
+          if (shown <= 0) continue;
+          updated[i] = { ...item, page: Math.max(1, shown + delta) };
+        }
       }
+      persistEntries(updated);
+      return;
+    }
+
+    // New offset = (picked PDF page - current printed page).
+    // For following numeric entries, apply it ON TOP OF the original metadata offset.
+    const inferredOffset = pickedPage - currentRaw;
+
+    for (let i = inspectorEntryIdx + 1; i < updated.length; i += 1) {
+      const item = updated[i];
+      const raw = parseRawNumericPage(item.raw_page);
+      if (raw === null) continue;
+      const autoWithOriginalOffset = computeAutoPdfPageFromRaw(raw);
+      updated[i] = { ...item, page: Math.max(1, autoWithOriginalOffset + inferredOffset) };
     }
 
     persistEntries(updated);
@@ -1264,9 +1281,9 @@ export function Step2AI({ state, updateState, onNext, onBack }: Props) {
               <button
                 onClick={applyInspectorPageAndShiftBelow}
                 className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-xs font-semibold text-white transition-colors"
-                title="Use this picked page and shift all entries below by the same delta"
+                title="Infer offset from (picked PDF page - current printed page), then add it on top of original offset for following numeric entries"
               >
-                ⇣ Use P{inspectorPage} && apply offset
+                ⇣ Use P{inspectorPage} && add inferred offset
               </button>
               {editingIdx !== inspectorEntryIdx && (
                 <button
