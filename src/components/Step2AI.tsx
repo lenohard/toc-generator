@@ -29,9 +29,22 @@ interface AIHistoryItem {
   durationMs: number;
 }
 
+interface AIExtractCacheRecord {
+  at: string;
+  model: string;
+  filePath: string;
+  fileType: "pdf" | "djvu";
+  selectedPages: number[];
+  pageCount: number | null;
+  entries: TocEntry[];
+  rawResponse: string;
+  usage: AIUsage;
+}
+
 const DEFAULT_MODEL = "google/gemini-3-flash";
 const AI_GATEWAY_BASE = "https://ai-gateway.vercel.sh";
 const HISTORY_MAX = 20;
+const EXTRACT_CACHE_PREFIX = "ai_extract_cache:v1";
 
 const SYSTEM_PROMPT = `You are a table of contents (TOC) extractor. The user will provide images of book/document pages that contain a table of contents.
 
@@ -166,6 +179,7 @@ export function Step2AI({ state, updateState, onNext, onBack }: Props) {
     costUsd: null,
   });
   const [histories, setHistories] = useState<AIHistoryItem[]>([]);
+  const [cacheNotice, setCacheNotice] = useState("");
 
   // Page inspector state
   const [inspectorEntryIdx, setInspectorEntryIdx] = useState<number | null>(null);
@@ -183,8 +197,35 @@ export function Step2AI({ state, updateState, onNext, onBack }: Props) {
   const [inspectorJumpInput, setInspectorJumpInput] = useState<string>("1");
   const [inspectorCache, setInspectorCache] = useState<Map<number, string>>(new Map());
   const [inspectorLoading, setInspectorLoading] = useState(false);
+  const inspectorInFlightPages = useRef<Set<number>>(new Set());
+  const inspectorReqSeq = useRef(0);
+  const loadedCacheKeyRef = useRef<string | null>(null);
 
   const historyKey = `ai_extract_history:${state.sessionId ?? "default"}`;
+  const selectedPagesKey = [...state.selectedPages].sort((a, b) => a - b).join(",");
+  const extractionCacheKey =
+    state.filePath && state.fileType && selectedPagesKey
+      ? `${EXTRACT_CACHE_PREFIX}:${state.fileType}:${state.filePath}:${selectedPagesKey}`
+      : null;
+
+  const saveExtractionCache = (
+    rows: TocEntry[],
+    extra?: Partial<Pick<AIExtractCacheRecord, "model" | "rawResponse" | "usage">>,
+  ) => {
+    if (!extractionCacheKey || rows.length === 0 || !state.filePath || !state.fileType) return;
+    const payload: AIExtractCacheRecord = {
+      at: new Date().toISOString(),
+      model: extra?.model ?? model,
+      filePath: state.filePath,
+      fileType: state.fileType,
+      selectedPages: [...state.selectedPages],
+      pageCount: state.pageCount,
+      entries: rows,
+      rawResponse: extra?.rawResponse ?? rawResponse,
+      usage: extra?.usage ?? usage,
+    };
+    localStorage.setItem(extractionCacheKey, JSON.stringify(payload));
+  };
 
   useEffect(() => {
     const raw = localStorage.getItem(historyKey);
@@ -203,6 +244,47 @@ export function Step2AI({ state, updateState, onNext, onBack }: Props) {
   useEffect(() => {
     localStorage.setItem(historyKey, JSON.stringify(histories));
   }, [historyKey, histories]);
+
+  // Hydrate cached extraction for the same book + selected TOC pages
+  useEffect(() => {
+    if (!extractionCacheKey) {
+      loadedCacheKeyRef.current = null;
+      setCacheNotice("");
+      return;
+    }
+    if (loadedCacheKeyRef.current === extractionCacheKey) return;
+    loadedCacheKeyRef.current = extractionCacheKey;
+
+    // If caller already injected TOC (e.g. task history restore), trust current state.
+    if (state.tocEntries.length > 0) {
+      setEntries(state.tocEntries);
+      return;
+    }
+
+    const raw = localStorage.getItem(extractionCacheKey);
+    if (!raw) return;
+
+    try {
+      const cached = JSON.parse(raw) as AIExtractCacheRecord;
+      if (!Array.isArray(cached.entries) || cached.entries.length === 0) return;
+
+      setEntries(cached.entries);
+      setRawResponse(cached.rawResponse || "");
+      setUsage(cached.usage || { promptTokens: null, completionTokens: null, totalTokens: null, costUsd: null });
+      if (cached.model) setModel(cached.model);
+      setCacheNotice(`Loaded cached AI extraction (${cached.entries.length} entries)`);
+      updateState({ tocEntries: cached.entries, aiDone: true });
+
+      if (state.sessionId) {
+        invoke("save_ai_toc", {
+          sessionId: state.sessionId,
+          entriesJson: JSON.stringify(cached.entries),
+        });
+      }
+    } catch {
+      // ignore broken cache
+    }
+  }, [extractionCacheKey, state.sessionId, state.tocEntries, updateState]);
 
   // Load full-res images for AI
   useEffect(() => {
@@ -378,6 +460,7 @@ export function Step2AI({ state, updateState, onNext, onBack }: Props) {
         sessionId: state.sessionId,
         entriesJson: JSON.stringify(parsed),
       });
+      saveExtractionCache(parsed, { model, rawResponse: text, usage: currentUsage });
 
       const durationMs = Date.now() - startedAt;
       updateState({
@@ -444,6 +527,8 @@ export function Step2AI({ state, updateState, onNext, onBack }: Props) {
         sessionId: state.sessionId,
         entriesJson: JSON.stringify(item.entries),
       });
+      saveExtractionCache(item.entries, { model: item.model, rawResponse: item.rawResponse, usage: item.usage });
+      setCacheNotice(`Loaded extraction history into cache (${item.entries.length} entries)`);
     }
   };
 
@@ -456,24 +541,14 @@ export function Step2AI({ state, updateState, onNext, onBack }: Props) {
     if (editingIdx === null || !editEntry) return;
     const updated = [...entries];
     updated[editingIdx] = editEntry;
-    setEntries(updated);
-    updateState({ tocEntries: updated });
-    invoke("save_ai_toc", {
-      sessionId: state.sessionId,
-      entriesJson: JSON.stringify(updated),
-    });
+    persistEntries(updated);
     setEditingIdx(null);
     setEditEntry(null);
   };
 
   const deleteEntry = (idx: number) => {
     const updated = entries.filter((_, i) => i !== idx);
-    setEntries(updated);
-    updateState({ tocEntries: updated, aiDone: updated.length > 0 });
-    invoke("save_ai_toc", {
-      sessionId: state.sessionId,
-      entriesJson: JSON.stringify(updated),
-    });
+    persistEntries(updated);
   };
 
   const addEntry = () => {
@@ -485,56 +560,97 @@ export function Step2AI({ state, updateState, onNext, onBack }: Props) {
       source_line: entries.length,
     };
     const updated = [...entries, newEntry];
-    setEntries(updated);
-    updateState({ tocEntries: updated, aiDone: true });
+    persistEntries(updated);
     startEdit(updated.length - 1);
   };
 
   const levelIndent = (level: number) => (level - 1) * 20;
 
-  // Load a high-resolution page image into inspector cache
-  const loadInspectorPage = async (page: number) => {
+  const parseRawNumericPage = (rawPage: string): number | null => {
+    const s = rawPage.trim();
+    if (!/^\d+$/.test(s)) return null;
+    const n = Number.parseInt(s, 10);
+    return Number.isNaN(n) ? null : n;
+  };
+
+  const computeAutoPdfPageFromRaw = (rawNum: number): number => {
+    const offset = state.metadata.offset ?? 0;
+    const ifCover = Number.parseInt(state.metadata.if_cover || "0", 10) || 0;
+    return ifCover > 0 && rawNum > 0 ? rawNum + offset + ifCover - 1 : rawNum + offset;
+  };
+
+  const fetchInspectorPages = async (pages: number[]) => {
     if (!state.filePath || !state.fileType || !state.sessionId) return;
-    if (inspectorCache.has(page)) {
-      setInspectorPage(page);
-      setInspectorJumpInput(String(page));
-      return;
-    }
-    setInspectorLoading(true);
+    const unique = Array.from(new Set(pages));
+    const missing = unique.filter((p) => !inspectorCache.has(p) && !inspectorInFlightPages.current.has(p));
+    if (missing.length === 0) return;
+
+    for (const p of missing) inspectorInFlightPages.current.add(p);
     try {
       const results = await invoke<PageThumbnail[]>("render_pages_for_ai", {
         sessionId: state.sessionId,
         filePath: state.filePath,
         fileType: state.fileType,
-        pages: [page],
+        pages: missing,
       });
       if (results.length > 0) {
-        const r = results[0];
         setInspectorCache((prev) => {
           const next = new Map(prev);
-          next.set(page, `data:${r.mime};base64,${r.data}`);
+          for (const r of results) {
+            next.set(r.page, `data:${r.mime};base64,${r.data}`);
+          }
           return next;
         });
       }
-      setInspectorPage(page);
-      setInspectorJumpInput(String(page));
     } catch (e) {
       setError(String(e));
     } finally {
+      for (const p of missing) inspectorInFlightPages.current.delete(p);
+    }
+  };
+
+  // Load target page now and prefetch nearby pages for faster prev/next browsing.
+  const loadInspectorPage = async (page: number) => {
+    if (!state.filePath || !state.fileType || !state.sessionId) return;
+    const total = state.pageCount ?? 9999;
+    const clamped = Math.max(1, Math.min(total, page));
+
+    setInspectorPage(clamped);
+    setInspectorJumpInput(String(clamped));
+
+    const reqId = ++inspectorReqSeq.current;
+    const hasNow = inspectorCache.has(clamped);
+    setInspectorLoading(!hasNow);
+
+    const nearPages: number[] = [];
+    for (let d = -2; d <= 2; d += 1) {
+      const p = clamped + d;
+      if (p >= 1 && p <= total) nearPages.push(p);
+    }
+
+    await fetchInspectorPages(nearPages);
+    if (reqId === inspectorReqSeq.current) {
       setInspectorLoading(false);
     }
   };
 
   const computeDisplayedPdfPage = (entry: TocEntry): number => {
     if (entry.page <= 0) return 0;
-    const rawNum = Number.parseInt(entry.raw_page, 10);
-    if (Number.isNaN(rawNum)) {
+
+    const rawNum = parseRawNumericPage(entry.raw_page);
+    if (rawNum === null) {
       // Non-numeric printed page (roman numerals etc.): resolved page is already final PDF index
       return entry.page;
     }
-    const offset = state.metadata.offset ?? 0;
-    const ifCover = Number.parseInt(state.metadata.if_cover || "0", 10) || 0;
-    return ifCover > 0 && rawNum > 0 ? rawNum + offset + ifCover - 1 : rawNum + offset;
+
+    // Numeric printed page:
+    // - default behavior uses metadata offset/cover
+    // - if user manually changed PDF pg (entry.page differs from raw printed number), keep manual value
+    if (entry.page > 0 && entry.page !== rawNum) {
+      return entry.page;
+    }
+
+    return computeAutoPdfPageFromRaw(rawNum);
   };
 
   const openInspector = (idx: number) => {
@@ -559,7 +675,7 @@ export function Step2AI({ state, updateState, onNext, onBack }: Props) {
         pages: [page],
       });
       if (result) setResolvePreviewImg(`data:${result.mime};base64,${result.data}`);
-    } catch (_) { /* ignore */ }
+    } catch { /* ignore */ }
     setResolvePreviewLoading(false);
   };
 
@@ -589,12 +705,7 @@ export function Step2AI({ state, updateState, onNext, onBack }: Props) {
     if (isNaN(p) || p < 1) return;
     const updated = [...entries];
     updated[resolveIdx] = { ...updated[resolveIdx], page: p };
-    setEntries(updated);
-    updateState({ tocEntries: updated });
-    invoke("save_ai_toc", {
-      sessionId: state.sessionId,
-      entriesJson: JSON.stringify(updated),
-    });
+    persistEntries(updated);
     // Move to next unresolved
     const nextIdx = updated.findIndex((e, i) => i > resolveIdx && e.page === 0);
     if (nextIdx !== -1) {
@@ -630,21 +741,53 @@ export function Step2AI({ state, updateState, onNext, onBack }: Props) {
     loadInspectorPage(clamped);
   };
 
+  const persistEntries = (updated: TocEntry[]) => {
+    setEntries(updated);
+    updateState({ tocEntries: updated, aiDone: updated.length > 0 });
+    invoke("save_ai_toc", {
+      sessionId: state.sessionId,
+      entriesJson: JSON.stringify(updated),
+    });
+    saveExtractionCache(updated);
+  };
+
   const applyInspectorPage = () => {
     if (inspectorEntryIdx === null) return;
     const p = inspectorPage;
+
     if (editingIdx === inspectorEntryIdx && editEntry) {
-      setEditEntry({ ...editEntry, page: p, raw_page: String(p) });
-    } else {
-      const updated = [...entries];
-      updated[inspectorEntryIdx] = { ...updated[inspectorEntryIdx], page: p, raw_page: String(p) };
-      setEntries(updated);
-      updateState({ tocEntries: updated });
-      invoke("save_ai_toc", {
-        sessionId: state.sessionId,
-        entriesJson: JSON.stringify(updated),
-      });
+      setEditEntry({ ...editEntry, page: p });
+      return;
     }
+
+    const updated = [...entries];
+    // Set PDF target page only. Keep raw_page as the printed label from TOC.
+    updated[inspectorEntryIdx] = { ...updated[inspectorEntryIdx], page: p };
+    persistEntries(updated);
+  };
+
+  const applyInspectorPageAndShiftBelow = () => {
+    if (inspectorEntryIdx === null) return;
+    const pickedPage = inspectorPage;
+    const current = entries[inspectorEntryIdx];
+    if (!current) return;
+
+    const oldDisplayed = computeDisplayedPdfPage(current);
+    const delta = pickedPage - oldDisplayed;
+
+    const updated = [...entries];
+    updated[inspectorEntryIdx] = { ...updated[inspectorEntryIdx], page: pickedPage };
+
+    if (delta !== 0) {
+      for (let i = inspectorEntryIdx + 1; i < updated.length; i += 1) {
+        const item = updated[i];
+        const shown = computeDisplayedPdfPage(item);
+        if (shown <= 0) continue;
+        updated[i] = { ...item, page: Math.max(1, shown + delta) };
+      }
+    }
+
+    persistEntries(updated);
   };
 
   // Resolve-overlay derived values (computed before return so no IIFE needed in JSX)
@@ -730,6 +873,12 @@ export function Step2AI({ state, updateState, onNext, onBack }: Props) {
             <div className="bg-green-950 border border-green-800 rounded-lg p-3">
               <p className="text-xs text-green-400 font-medium">✓ {entries.length} TOC entries extracted</p>
               <p className="text-xs text-green-700 mt-1">Review and edit the table below, then continue to merge.</p>
+            </div>
+          )}
+
+          {cacheNotice && (
+            <div className="bg-indigo-950 border border-indigo-800 rounded-lg p-3">
+              <p className="text-xs text-indigo-300">{cacheNotice}</p>
             </div>
           )}
 
@@ -1110,7 +1259,14 @@ export function Step2AI({ state, updateState, onNext, onBack }: Props) {
                 onClick={applyInspectorPage}
                 className="w-full py-2 bg-amber-600 hover:bg-amber-500 rounded-lg text-xs font-semibold text-white transition-colors"
               >
-                ✓ Use page {inspectorPage} for this entry
+                ✓ Use P{inspectorPage}
+              </button>
+              <button
+                onClick={applyInspectorPageAndShiftBelow}
+                className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-xs font-semibold text-white transition-colors"
+                title="Use this picked page and shift all entries below by the same delta"
+              >
+                ⇣ Use P{inspectorPage} && apply offset
               </button>
               {editingIdx !== inspectorEntryIdx && (
                 <button

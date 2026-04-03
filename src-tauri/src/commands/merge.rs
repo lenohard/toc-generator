@@ -65,11 +65,19 @@ pub fn build_toc(session_id: &str) -> Result<Vec<TocEntry>, String> {
 
         for entry in &mut entries {
             if let Ok(raw) = entry.raw_page.parse::<i32>() {
-                entry.page = if if_cover > 0 && raw > 0 {
+                let auto_page = if if_cover > 0 && raw > 0 {
                     raw + offset + if_cover - 1
                 } else {
                     raw + offset
                 };
+
+                // If frontend manually changed PDF page for a numeric printed page,
+                // keep that manual final page. Otherwise use metadata-derived page.
+                if entry.page > 0 && entry.page != raw {
+                    entry.page = entry.page.max(0);
+                } else {
+                    entry.page = auto_page;
+                }
             } else {
                 // Non-numeric printed page (e.g. roman numeral): frontend-resolved page is already
                 // the final PDF page index and must not have offset/cover applied again.
