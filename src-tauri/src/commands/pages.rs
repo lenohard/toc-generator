@@ -1,4 +1,5 @@
 use super::session::get_session_path;
+use super::tool_path::{resolve_tool, tool_search_path};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -11,17 +12,6 @@ pub struct PageThumbnail {
     pub mime: String,  // "image/png" or "image/x-portable-pixmap"
 }
 
-fn resolve_tool(name: &str) -> String {
-    let output = Command::new("which")
-        .arg(name)
-        .env("PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
-        .output();
-    match output {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
-        _ => name.to_string(),
-    }
-}
-
 /// Get the total page count of a PDF or DjVu file
 #[tauri::command]
 pub fn get_page_count(file_path: String, file_type: String) -> Result<u32, String> {
@@ -30,7 +20,7 @@ pub fn get_page_count(file_path: String, file_type: String) -> Result<u32, Strin
             let pdfinfo = resolve_tool("pdfinfo");
             let output = Command::new(&pdfinfo)
                 .arg(&file_path)
-                .env("PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
+                .env("PATH", &tool_search_path())
                 .output()
                 .map_err(|e| format!("pdfinfo failed: {}", e))?;
             let out = String::from_utf8_lossy(&output.stdout);
@@ -46,7 +36,7 @@ pub fn get_page_count(file_path: String, file_type: String) -> Result<u32, Strin
             let djvused = resolve_tool("djvused");
             let output = Command::new(&djvused)
                 .args([file_path.as_str(), "-e", "n"])
-                .env("PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
+                .env("PATH", &tool_search_path())
                 .output()
                 .map_err(|e| format!("djvused failed: {}", e))?;
             let out = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -87,7 +77,7 @@ pub async fn render_page_thumbnails(
                         file_path.as_str(),
                         out_prefix.to_str().unwrap(),
                     ])
-                    .env("PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
+                    .env("PATH", &tool_search_path())
                     .output();
 
                 // pdftoppm appends -1.png or -01.png etc.
@@ -112,7 +102,7 @@ pub async fn render_page_thumbnails(
                         file_path.as_str(),
                         ppm_path.to_str().unwrap(),
                     ])
-                    .env("PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
+                    .env("PATH", &tool_search_path())
                     .output();
 
                 if ppm_path.exists() {
@@ -206,7 +196,7 @@ pub async fn render_pages_for_ai(
                         file_path.as_str(),
                         out_prefix.to_str().unwrap(),
                     ])
-                    .env("PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
+                    .env("PATH", &tool_search_path())
                     .output();
 
                 let prefix = format!("aipage{:04}", page);
@@ -236,7 +226,7 @@ pub async fn render_pages_for_ai(
                         file_path.as_str(),
                         ppm_path.to_str().unwrap(),
                     ])
-                    .env("PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
+                    .env("PATH", &tool_search_path())
                     .output();
 
                 if ppm_path.exists() {

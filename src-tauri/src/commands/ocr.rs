@@ -1,4 +1,5 @@
 use super::session::get_session_path;
+use super::tool_path::{resolve_tool, tool_search_path};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -36,18 +37,6 @@ fn emit_log(app: &AppHandle, session_id: &str, line: &str, done: bool, success: 
     );
 }
 
-fn resolve_tool(name: &str) -> String {
-    // Ensure homebrew bin is in PATH
-    let output = Command::new("which")
-        .arg(name)
-        .env("PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
-        .output();
-    match output {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
-        _ => name.to_string(),
-    }
-}
-
 fn run_cmd_log(
     app: &AppHandle,
     session_id: &str,
@@ -61,7 +50,7 @@ fn run_cmd_log(
     let mut child = Command::new(program)
         .args(args)
         .current_dir(cwd)
-        .env("PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
+        .env("PATH", &tool_search_path())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -309,7 +298,7 @@ fn extract_pdf_pages(app: &AppHandle, opts: &OcrOptions, work_dir: &Path) -> Res
             opts.file_path.as_str(),
             pdf_text_path.to_str().unwrap(),
         ])
-        .env("PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
+        .env("PATH", &tool_search_path())
         .current_dir(work_dir)
         .output();
 

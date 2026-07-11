@@ -1,5 +1,6 @@
 use super::regex_tools::{Rule, SessionMetadata};
 use super::session::get_session_path;
+use super::tool_path::{resolve_tool, tool_search_path};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -228,17 +229,6 @@ fn entries_to_djvu_outline(entries: &[TocEntry]) -> String {
     lines.join("\n")
 }
 
-fn resolve_tool(name: &str) -> String {
-    let output = Command::new("which")
-        .arg(name)
-        .env("PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
-        .output();
-    match output {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
-        _ => name.to_string(),
-    }
-}
-
 #[tauri::command]
 pub async fn run_merge(app: AppHandle, opts: MergeOptions) -> Result<String, String> {
     let session_id = opts.session_id.clone();
@@ -298,7 +288,7 @@ fn merge_pdf(
             "output",
             info_path.to_str().unwrap(),
         ])
-        .env("PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
+        .env("PATH", &tool_search_path())
         .output()
         .map_err(|e| format!("pdftk dump_data failed: {}", e))?;
 
@@ -365,7 +355,7 @@ fn merge_pdf(
             "output",
             opts.output_file.as_str(),
         ])
-        .env("PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
+        .env("PATH", &tool_search_path())
         .output()
         .map_err(|e| format!("pdftk update_info failed: {}", e))?;
 
@@ -424,7 +414,7 @@ fn merge_djvu(
             &set_outline,
             "-s",
         ])
-        .env("PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
+        .env("PATH", &tool_search_path())
         .output()
         .map_err(|e| format!("djvused failed: {}", e))?;
 

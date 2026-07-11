@@ -2,6 +2,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+use super::tool_path::{resolve_tool, tool_search_path};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -9,17 +10,6 @@ pub struct ExistingTocEntry {
     pub title: String,
     pub page: i32,
     pub level: u32,
-}
-
-fn resolve_tool(name: &str) -> String {
-    let output = Command::new("which")
-        .arg(name)
-        .env("PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
-        .output();
-    match output {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
-        _ => name.to_string(),
-    }
 }
 
 /// Read existing bookmarks/TOC from a PDF or DjVu file.
@@ -85,7 +75,7 @@ fn read_pdf_toc(file_path: &str) -> Result<Vec<ExistingTocEntry>, String> {
     let pdftk = resolve_tool("pdftk");
     let output = Command::new(&pdftk)
         .args([file_path, "dump_data", "output", "-"])
-        .env("PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
+        .env("PATH", &tool_search_path())
         .output()
         .map_err(|e| format!("pdftk dump_data failed: {}", e))?;
 
@@ -126,7 +116,7 @@ fn read_djvu_toc(file_path: &str) -> Result<Vec<ExistingTocEntry>, String> {
     let djvused = resolve_tool("djvused");
     let output = Command::new(&djvused)
         .args([file_path, "-e", "print-outline"])
-        .env("PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
+        .env("PATH", &tool_search_path())
         .output()
         .map_err(|e| format!("djvused print-outline failed: {}", e))?;
 

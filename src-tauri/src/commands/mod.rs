@@ -1,4 +1,5 @@
 pub mod deps;
+pub mod tool_path;
 pub mod history;
 pub mod merge;
 pub mod ocr;

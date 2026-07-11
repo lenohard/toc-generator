@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
-use std::process::Command;
 
-const CHECK_PATH: &str = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
+use super::tool_path::find_tool;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct DepStatus {
@@ -9,25 +8,6 @@ pub struct DepStatus {
     pub found: bool,
     pub path: Option<String>,
     pub required_for: String,
-}
-
-fn find_tool(name: &str) -> Option<String> {
-    let result = Command::new("which")
-        .arg(name)
-        .env("PATH", CHECK_PATH)
-        .output()
-        .ok()?;
-
-    if !result.status.success() {
-        return None;
-    }
-
-    let path = String::from_utf8_lossy(&result.stdout).trim().to_string();
-    if path.is_empty() {
-        None
-    } else {
-        Some(path)
-    }
 }
 
 #[tauri::command]
