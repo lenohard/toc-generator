@@ -20,8 +20,7 @@ export function Step1Select({ state, updateState, onNext, onEditExisting }: Prop
   const [loadingThumbs, setLoadingThumbs] = useState(false);
   const [thumbs, setThumbs] = useState<Map<number, string>>(new Map());
   const [loadedUpTo, setLoadedUpTo] = useState(0);
-  const [apiKey, setApiKey] = useState(state.apiKey || "");
-  const [showApiKey, setShowApiKey] = useState(!state.apiKey);
+
   const [previewPage, setPreviewPage] = useState<number | null>(null);
   const [previewImage, setPreviewImage] = useState<string>("");
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -206,7 +205,6 @@ export function Step1Select({ state, updateState, onNext, onEditExisting }: Prop
   const saveApiKey = () => {
     localStorage.setItem("ai_gateway_key", apiKey);
     updateState({ apiKey });
-    setShowApiKey(false);
   };
 
   const saveMetadata = (meta: typeof state.metadata) => {
@@ -320,45 +318,16 @@ export function Step1Select({ state, updateState, onNext, onEditExisting }: Prop
             </div>
           )}
 
-          {/* API Key section */}
+          {/* API Key status */}
           <div className="mb-4">
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="text-xs text-zinc-400">AI Gateway Key</label>
-              {!showApiKey && state.apiKey && (
-                <button
-                  onClick={() => setShowApiKey(true)}
-                  className="text-xs text-zinc-600 hover:text-zinc-400"
-                >
-                  Edit
-                </button>
+            <label className="text-xs text-zinc-400 mb-1.5 block">API Key</label>
+            <div className="flex items-center gap-2 text-xs">
+              {state.apiKey ? (
+                <span className="text-green-400">✓ Key set</span>
+              ) : (
+                <span className="text-amber-400">⚠ Not set — <button onClick={() => window.dispatchEvent(new CustomEvent('open-settings'))} className="text-indigo-400 hover:underline">open Settings</button></span>
               )}
             </div>
-            {showApiKey ? (
-              <div className="space-y-2">
-                <input
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder="sk-..."
-                  className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-200 focus:outline-none focus:border-indigo-500 font-mono"
-                />
-                <button
-                  onClick={saveApiKey}
-                  disabled={!apiKey}
-                  className="w-full py-1.5 bg-indigo-700 hover:bg-indigo-600 disabled:bg-zinc-700 disabled:text-zinc-500 rounded text-xs text-white transition-colors"
-                >
-                  Save Key
-                </button>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2 text-xs">
-                {state.apiKey ? (
-                  <span className="text-green-400">✓ Key saved</span>
-                ) : (
-                  <span className="text-amber-400">⚠ Key not set</span>
-                )}
-              </div>
-            )}
           </div>
 
           {/* Page Adjustments */}
@@ -406,12 +375,10 @@ export function Step1Select({ state, updateState, onNext, onEditExisting }: Prop
         <div className="p-5 border-t border-zinc-800">
           <button
             onClick={onNext}
-            disabled={state.selectedPages.length === 0 || !state.apiKey}
+            disabled={state.selectedPages.length === 0}
             className="w-full py-2.5 bg-green-700 hover:bg-green-600 disabled:bg-zinc-700 disabled:text-zinc-500 rounded-lg text-sm font-medium text-white transition-colors"
           >
-            {!state.apiKey
-              ? "Set API key first"
-              : state.selectedPages.length === 0
+            {state.selectedPages.length === 0
               ? "Select TOC pages"
               : `Continue with ${state.selectedPages.length} page(s) →`}
           </button>

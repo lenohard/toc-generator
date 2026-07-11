@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { fetch } from "@tauri-apps/plugin-http";
 import type { AppState, PageThumbnail, TocEntry } from "../types";
 
 interface Props {
@@ -42,7 +43,7 @@ interface AIExtractCacheRecord {
 }
 
 const DEFAULT_MODEL = "google/gemini-3-flash";
-const AI_GATEWAY_BASE = "https://ai-gateway.vercel.sh";
+const DEFAULT_BASE_URL = "https://opencode.ai/zen/go";
 const HISTORY_MAX = 20;
 const EXTRACT_CACHE_PREFIX = "ai_extract_cache:v1";
 
@@ -165,7 +166,13 @@ export function Step2AI({ state, updateState, onNext, onBack }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [entries, setEntries] = useState<TocEntry[]>(state.tocEntries || []);
-  const [model, setModel] = useState(DEFAULT_MODEL);
+  const [model, setModel] = useState(
+    localStorage.getItem("ai_model") || DEFAULT_MODEL
+  );
+  const baseUrl = localStorage.getItem("ai_base_url") || DEFAULT_BASE_URL;
+  const [models, setModels] = useState<string[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState("");
   const [pageImages, setPageImages] = useState<Map<number, string>>(new Map());
   const [loadingImages, setLoadingImages] = useState(false);
   const [editingIdx, setEditingIdx] = useState<number | null>(null);
@@ -245,6 +252,23 @@ export function Step2AI({ state, updateState, onNext, onBack }: Props) {
     localStorage.setItem(historyKey, JSON.stringify(histories));
   }, [historyKey, histories]);
 
+  // Fetch available models
+  useEffect(() => {
+    const apiKey = localStorage.getItem("ai_gateway_key") || "";
+    if (!apiKey) return;
+    setModelsLoading(true);
+    setModelsError("");
+    invoke<string[]>("fetch_models", { baseUrl, apiKey })
+      .then(setModels)
+      .catch((e) => setModelsError(String(e)))
+      .finally(() => setModelsLoading(false));
+  }, [baseUrl]);
+
+  const handleModelChange = (newModel: string) => {
+    localStorage.setItem("ai_model", newModel);
+    setModel(newModel);
+  };
+
   // Hydrate cached extraction for the same book + selected TOC pages
   useEffect(() => {
     if (!extractionCacheKey) {
@@ -306,8 +330,9 @@ export function Step2AI({ state, updateState, onNext, onBack }: Props) {
   }, [state.selectedPages, state.filePath, state.fileType, state.sessionId]);
 
   const runAI = async () => {
-    if (!state.apiKey) {
-      setError("API key not set. Go back to Step 1 to set it.");
+    const apiKey = localStorage.getItem("ai_gateway_key") || "";
+    if (!apiKey) {
+      setError("API key not set. Open Settings (⚙) to configure it.");
       return;
     }
     if (pageImages.size === 0) {
@@ -361,11 +386,11 @@ export function Step2AI({ state, updateState, onNext, onBack }: Props) {
     ];
 
     try {
-      const resp = await fetch(`${AI_GATEWAY_BASE}/v1/chat/completions`, {
+      const resp = await fetch(`${baseUrl}/v1/chat/completions`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${state.apiKey}`,
+          Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
           model,
@@ -849,16 +874,21 @@ export function Step2AI({ state, updateState, onNext, onBack }: Props) {
             <label className="block text-xs text-zinc-400 mb-1.5">Model</label>
             <select
               value={model}
-              onChange={(e) => setModel(e.target.value)}
+              onChange={(e) => handleModelChange(e.target.value)}
               className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-200 focus:outline-none focus:border-indigo-500"
             >
-              <option value="google/gemini-3-flash">google/gemini-3-flash (default)</option>
-              <option value="google/gemini-3.1-pro-preview">google/gemini-3.1-pro-preview</option>
-              <option value="google/gemini-2.5-pro">google/gemini-2.5-pro</option>
-              <option value="anthropic/claude-haiku-4.5">anthropic/claude-haiku-4.5</option>
-              <option value="anthropic/claude-sonnet-4.6">anthropic/claude-sonnet-4.6</option>
-              <option value="openai/gpt-5.4">openai/gpt-5.4</option>
+              {models.length > 0 ? (
+                models.map((id) => (
+                  <option key={id} value={id}>
+                    {id}
+                  </option>
+                ))
+              ) : (
+                <option value={model}>{model}</option>
+              )}
             </select>
+            {modelsLoading && <p className="text-xs text-zinc-500 mt-1 animate-pulse">Loading models...</p>}
+            {modelsError && <p className="text-xs text-red-400 mt-1">{modelsError}</p>}
           </div>
 
           <div className="bg-zinc-800 rounded-lg p-3 text-xs space-y-1">

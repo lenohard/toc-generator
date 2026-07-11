@@ -6,6 +6,7 @@ import { Step2AI } from "./components/Step2AI";
 import { Step3Merge } from "./components/Step3Merge";
 import { DepsWarning } from "./components/DepsWarning";
 import { TaskHistoryDrawer } from "./components/TaskHistoryDrawer";
+import { Settings } from "./components/Settings";
 import type { AppState, DepStatus, Step, TaskHistoryRecord, TocEntry } from "./types";
 
 const initialState: AppState = {
@@ -32,6 +33,7 @@ export default function App() {
   const [showHistory, setShowHistory] = useState(false);
   const [updateBusy, setUpdateBusy] = useState(false);
   const [updateStatus, setUpdateStatus] = useState("");
+  const [showSettings, setShowSettings] = useState(false);
 
   const updateState = (partial: Partial<AppState>) => {
     setState((prev) => ({ ...prev, ...partial }));
@@ -56,6 +58,23 @@ export default function App() {
     });
 
     refreshDeps(true).catch(() => undefined);
+
+    // Auto-check for updates on startup (silent, no blocking)
+    check().then((update) => {
+      if (update) {
+        const ok = window.confirm(
+          `New version ${update.version} found. Download and install now?`
+        );
+        if (ok) {
+          setUpdateStatus("Downloading update...");
+          update.downloadAndInstall().then(() => {
+            setUpdateStatus("Update installed. Please restart app.");
+          });
+        } else {
+          setUpdateStatus(`Update ${update.version} available`);
+        }
+      }
+    }).catch(() => undefined);
   }, [refreshDeps]);
 
   const editExistingToc = async (entries: TocEntry[]) => {
@@ -210,9 +229,18 @@ export default function App() {
           ))}
         </div>
 
+        <div className="flex items-center gap-4 ml-auto">
+        <button
+          onClick={() => setShowSettings(true)}
+          className="flex items-center gap-1.5 text-xs text-zinc-300 hover:text-white"
+        >
+          <span>⚙</span>
+          <span>Settings</span>
+        </button>
+
         <button
           onClick={() => setShowHistory(true)}
-          className="ml-auto flex items-center gap-1.5 text-xs text-zinc-300 hover:text-white"
+          className="flex items-center gap-1.5 text-xs text-zinc-300 hover:text-white"
         >
           <span>🕘</span>
           <span>Task History</span>
@@ -237,6 +265,7 @@ export default function App() {
             <span>Missing tools</span>
           </button>
         )}
+        </div>
       </div>
 
       {updateStatus && (
@@ -287,6 +316,8 @@ export default function App() {
         onClose={() => setShowHistory(false)} 
         onLoadTask={loadTask}
       />
+
+      {showSettings && <Settings onClose={() => setShowSettings(false)} />}
     </div>
   );
 }

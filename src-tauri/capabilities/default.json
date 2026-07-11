@@ -17,6 +17,10 @@
     "fs:allow-mkdir",
     "fs:allow-remove",
     "fs:allow-exists",
-    "updater:default"
+    "updater:default",
+    {
+      "identifier": "http:default",
+      "allow": [{"url": "https://opencode.ai/**"}]
+    }
   ]
 }

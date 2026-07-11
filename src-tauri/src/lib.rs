@@ -1,6 +1,6 @@
 mod commands;
 
-use commands::{deps, history, merge, ocr, pages, regex_tools, session, system};
+use commands::{deps, fetch_models, history, merge, ocr, pages, regex_tools, session, system};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -10,6 +10,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_http::init())
         .invoke_handler(tauri::generate_handler![
             deps::check_deps,
             session::create_session,
@@ -36,6 +37,7 @@ pub fn run() {
             history::append_task_history,
             history::list_task_history,
             history::clear_task_history,
+            fetch_models::fetch_models,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

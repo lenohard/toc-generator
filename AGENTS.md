@@ -98,6 +98,15 @@ For non-trivial changes, validate:
 
 - **GitHub token**: configured in `.envrc` (auto-loaded by direnv). Use `$GITHUB_TOKEN` directly in shell/curl for GitHub repo management (releases, PRs, etc.) — no manual setup needed.
 
+## Tauri v2 HTTP Plugin (CORS bypass)
+
+- Browser `fetch` in Tauri webview is blocked by CORS. Use `import { fetch } from "@tauri-apps/plugin-http"` instead.
+- `http:default` alone allows NO URLs. Scope must be explicit on the permission entry:
+  ```json
+  { "identifier": "http:default", "allow": [{ "url": "https://example.com/**" }] }
+  ```
+- Capability changes require `tauri dev` restart (not hot-reloadable).
+
 ## Notes
 
 - Current default AI model in UI: `google/gemini-3-flash`.
