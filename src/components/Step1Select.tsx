@@ -202,11 +202,6 @@ export function Step1Select({ state, updateState, onNext, onEditExisting }: Prop
     }
   };
 
-  const saveApiKey = () => {
-    localStorage.setItem("ai_gateway_key", apiKey);
-    updateState({ apiKey });
-  };
-
   const saveMetadata = (meta: typeof state.metadata) => {
     updateState({ metadata: meta });
     if (!state.sessionId) return;
