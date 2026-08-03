@@ -209,7 +209,9 @@ export function Settings({ onClose, onSaved }: Props) {
               <option value="responses">openai-responses (/v1/responses)</option>
             </select>
             <p className="text-xs text-zinc-500 mt-1">
-              Request protocol used for AI extraction
+              Request protocol used for AI extraction.
+              Note: some gateways (e.g. opencode zen/go) require a bare model ID
+              (no provider prefix) for the responses endpoint.
             </p>
           </div>
 
