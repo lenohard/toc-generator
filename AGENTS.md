@@ -14,7 +14,7 @@ Primary workflow:
 - Frontend: React 19 + TypeScript + Vite + Tailwind v4
 - Desktop shell: Tauri v2 (Rust backend)
 - Backend language: Rust 2021
-- AI endpoint: Vercel AI Gateway (`/v1/chat/completions`)，同时支持 OpenAI Responses 协议（`/v1/responses`），协议可在 Settings 选择（localStorage `ai_protocol`: `chat` | `responses`，默认 `chat`）。responses 流式解析要点见 model-gateway skill「OpenAI Responses API」章节。
+- AI endpoint: Vercel AI Gateway (`/v1/chat/completions`)，同时支持 OpenAI Responses（`/v1/responses`）与 Anthropic Messages（`/v1/messages`，`x-api-key` + `anthropic-version` 头）协议，协议可在 Settings 选择（localStorage `ai_protocol`: `chat` | `responses` | `anthropic`，默认 `chat`）。responses/messages 流式解析要点见 model-gateway skill 对应章节。
 
 ## Key Directories
 
@@ -111,6 +111,7 @@ For non-trivial changes, validate:
 
 - 配置项（localStorage）：`ai_base_url`、`ai_model`、`ai_gateway_key`、`ai_protocol`。Settings 点 Save 才写入。
 - Settings 保存后通过 `onSaved` 回调触发 App 的 `settingsVersion` state 自增，Step2AI 用 `useEffect([settingsVersion])` 重新同步 model/protocol state——否则已挂载的 Step2 感知不到 Settings 改动（model/protocol 是 useState，仅在挂载时读 localStorage）。
+- **发版流程**：分支是 `master`（非 main）。bump 三处版本号（`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`package.json`）→ commit → `git tag vX.Y.Z` → push master + tag。GitHub Actions（`.github/workflows/release.yml`）自动构建签名并发布到 GitHub Releases（含 `latest.json`/`.app.tar.gz`/`.sig`），用户端启动时 `check()` 自动更新，无需重装。CI 未配 Apple notarization（分发给他人需先右键打开）。
 
 - Current default AI model in UI: `google/gemini-3-flash`.
 - API key is currently stored in `localStorage` (`ai_gateway_key`).
@@ -121,3 +122,6 @@ For non-trivial changes, validate:
 - Step 2 should display both the printed page label and the actual merge target PDF page. The displayed PDF page for numeric printed pages must be computed from metadata using the same offset/cover logic as merge preview; for non-numeric printed pages, use the user-resolved final PDF page directly.
 - Step 3 / merge logic must not apply offset twice to non-numeric printed pages. If `raw_page` is non-numeric, treat stored `page` as the final PDF page index.
 - The Step 2 page inspector should use high-resolution rendering (`render_pages_for_ai`) rather than low-resolution thumbnails so the side panel remains sharp when resized.
+
+- ocr-bookmarker 的 git 分支是 `master` 不是 `main`；远端 tag 可能领先本地（v0.1.7-0.1.9 曾只在远端），发布前先 `git fetch --tags`。
+- ocr-bookmarker 发版流程：改 `tauri.conf.json` + `Cargo.toml` + `package.json` 三处版本号 → commit → `git tag vX.Y.Z` → push master + tag → GitHub Actions 自动发布（含 latest.json 等 updater 产物），用户端启动时自动 check + 原地更新，无需重装。
