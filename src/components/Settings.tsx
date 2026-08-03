@@ -4,12 +4,13 @@ import { fetch } from "@tauri-apps/plugin-http";
 
 interface Props {
   onClose: () => void;
+  onSaved?: () => void;
 }
 
 const DEFAULT_BASE_URL = "https://opencode.ai/zen/go";
 const DEFAULT_MODEL = "google/gemini-3-flash";
 
-export function Settings({ onClose }: Props) {
+export function Settings({ onClose, onSaved }: Props) {
   const [baseUrl, setBaseUrl] = useState(
     localStorage.getItem("ai_base_url") || DEFAULT_BASE_URL
   );
@@ -18,6 +19,9 @@ export function Settings({ onClose }: Props) {
   );
   const [apiKey, setApiKey] = useState(
     localStorage.getItem("ai_gateway_key") || ""
+  );
+  const [protocol, setProtocol] = useState<"chat" | "responses">(
+    localStorage.getItem("ai_protocol") === "responses" ? "responses" : "chat"
   );
   const [saved, setSaved] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -49,6 +53,8 @@ export function Settings({ onClose }: Props) {
     localStorage.setItem("ai_base_url", baseUrl);
     localStorage.setItem("ai_model", model);
     localStorage.setItem("ai_gateway_key", apiKey);
+    localStorage.setItem("ai_protocol", protocol);
+    onSaved?.();
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
@@ -57,28 +63,50 @@ export function Settings({ onClose }: Props) {
     setBaseUrl(DEFAULT_BASE_URL);
     setModel(DEFAULT_MODEL);
     setApiKey("");
+    setProtocol("chat");
   };
 
   const handleTest = async () => {
     setTesting(true);
     setTestResult(null);
     try {
-      const resp = await fetch(`${baseUrl}/v1/chat/completions`, {
+      const endpoint =
+        protocol === "responses"
+          ? `${baseUrl}/v1/responses`
+          : `${baseUrl}/v1/chat/completions`;
+      const body =
+        protocol === "responses"
+          ? {
+              model,
+              input: [
+                {
+                  role: "user",
+                  content: [{ type: "input_text", text: "Say OK" }],
+                },
+              ],
+              max_output_tokens: 16,
+            }
+          : {
+              model,
+              messages: [{ role: "user", content: "Say OK" }],
+              max_tokens: 10,
+            };
+      const resp = await fetch(endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${apiKey}`,
         },
-        body: JSON.stringify({
-          model,
-          messages: [{ role: "user", content: "Say OK" }],
-          max_tokens: 10,
-        }),
+        body: JSON.stringify(body),
       });
       if (resp.ok) {
         const data = await resp.json();
-        const reply = data.choices?.[0]?.message?.content || "(no content)";
-        setTestResult({ ok: true, msg: `Success: ${reply.slice(0, 50)}` });
+        const reply =
+          protocol === "responses"
+            ? data.output_text || data.output?.[0]?.content?.[0]?.text
+            : data.choices?.[0]?.message?.content;
+        const text = typeof reply === "string" ? reply : "(no content)";
+        setTestResult({ ok: true, msg: `Success: ${text.slice(0, 50)}` });
       } else {
         setTestResult({ ok: false, msg: `HTTP ${resp.status}: ${await resp.text()}` });
       }
@@ -165,6 +193,26 @@ export function Settings({ onClose }: Props) {
             </p>
           </div>
 
+          {/* Protocol */}
+          <div>
+            <label className="block text-xs text-zinc-400 mb-1.5">
+              API Protocol
+            </label>
+            <select
+              value={protocol}
+              onChange={(e) =>
+                setProtocol(e.target.value as "chat" | "responses")
+              }
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-200 focus:outline-none focus:border-indigo-500"
+            >
+              <option value="chat">chat-completions (/v1/chat/completions)</option>
+              <option value="responses">openai-responses (/v1/responses)</option>
+            </select>
+            <p className="text-xs text-zinc-500 mt-1">
+              Request protocol used for AI extraction
+            </p>
+          </div>
+
           {/* API Key */}
           <div>
             <label className="block text-xs text-zinc-400 mb-1.5">
@@ -202,7 +250,7 @@ export function Settings({ onClose }: Props) {
           <div className="bg-zinc-800 rounded-lg p-3 text-xs">
             <span className="text-zinc-500">Requests go to: </span>
             <span className="text-zinc-300 break-all">
-              {baseUrl}/v1/chat/completions
+              {baseUrl}/{protocol === "responses" ? "v1/responses" : "v1/chat/completions"}
             </span>
           </div>
         </div>

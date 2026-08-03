@@ -14,7 +14,7 @@ Primary workflow:
 - Frontend: React 19 + TypeScript + Vite + Tailwind v4
 - Desktop shell: Tauri v2 (Rust backend)
 - Backend language: Rust 2021
-- AI endpoint: Vercel AI Gateway (`/v1/chat/completions`)
+- AI endpoint: Vercel AI Gateway (`/v1/chat/completions`)，同时支持 OpenAI Responses 协议（`/v1/responses`），协议可在 Settings 选择（localStorage `ai_protocol`: `chat` | `responses`，默认 `chat`）。responses 流式解析要点见 model-gateway skill「OpenAI Responses API」章节。
 
 ## Key Directories
 
@@ -108,6 +108,9 @@ For non-trivial changes, validate:
 - Capability changes require `tauri dev` restart (not hot-reloadable).
 
 ## Notes
+
+- 配置项（localStorage）：`ai_base_url`、`ai_model`、`ai_gateway_key`、`ai_protocol`。Settings 点 Save 才写入。
+- Settings 保存后通过 `onSaved` 回调触发 App 的 `settingsVersion` state 自增，Step2AI 用 `useEffect([settingsVersion])` 重新同步 model/protocol state——否则已挂载的 Step2 感知不到 Settings 改动（model/protocol 是 useState，仅在挂载时读 localStorage）。
 
 - Current default AI model in UI: `google/gemini-3-flash`.
 - API key is currently stored in `localStorage` (`ai_gateway_key`).

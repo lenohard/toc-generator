@@ -8,6 +8,7 @@ interface Props {
   updateState: (partial: Partial<AppState>) => void;
   onNext: () => void;
   onBack: () => void;
+  settingsVersion?: number;
 }
 
 interface AIUsage {
@@ -43,6 +44,7 @@ interface AIExtractCacheRecord {
 }
 
 const DEFAULT_MODEL = "google/gemini-3-flash";
+const DEFAULT_PROTOCOL = "chat";
 const DEFAULT_BASE_URL = "https://opencode.ai/zen/go";
 const HISTORY_MAX = 20;
 const EXTRACT_CACHE_PREFIX = "ai_extract_cache:v1";
@@ -156,18 +158,44 @@ function mergeUsage(base: AIUsage, packet: unknown): AIUsage {
   };
 }
 
+async function consumeSSE(
+  resp: { body: ReadableStream<Uint8Array> | null },
+  onPacket: (packet: unknown) => void
+): Promise<void> {
+  const reader = resp.body!.getReader();
+  const decoder = new TextDecoder();
+  let sseBuf = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    sseBuf += decoder.decode(value, { stream: true });
+    const lines = sseBuf.split("\n");
+    sseBuf = lines.pop() ?? "";
+    for (const lineRaw of lines) {
+      const line = lineRaw.trim();
+      if (!line.startsWith("data:")) continue;
+      const data = line.slice(5).trim();
+      if (!data || data === "[DONE]") continue;
+      onPacket(JSON.parse(data));
+    }
+  }
+}
+
 function formatCost(costUsd: number | null): string {
   if (costUsd === null) return "N/A";
   if (costUsd < 0.0001) return `$${costUsd.toExponential(2)}`;
   return `$${costUsd.toFixed(6)}`;
 }
 
-export function Step2AI({ state, updateState, onNext, onBack }: Props) {
+export function Step2AI({ state, updateState, onNext, onBack, settingsVersion }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [entries, setEntries] = useState<TocEntry[]>(state.tocEntries || []);
   const [model, setModel] = useState(
     localStorage.getItem("ai_model") || DEFAULT_MODEL
+  );
+  const [protocol, setProtocol] = useState<"chat" | "responses">(
+    localStorage.getItem("ai_protocol") === "responses" ? "responses" : DEFAULT_PROTOCOL
   );
   const baseUrl = localStorage.getItem("ai_base_url") || DEFAULT_BASE_URL;
   const [models, setModels] = useState<string[]>([]);
@@ -268,6 +296,15 @@ export function Step2AI({ state, updateState, onNext, onBack }: Props) {
     localStorage.setItem("ai_model", newModel);
     setModel(newModel);
   };
+
+  // Re-sync config when Settings saves (model/protocol may have changed while mounted)
+  useEffect(() => {
+    const savedModel = localStorage.getItem("ai_model");
+    if (savedModel) setModel(savedModel);
+    setProtocol(
+      localStorage.getItem("ai_protocol") === "responses" ? "responses" : DEFAULT_PROTOCOL
+    );
+  }, [settingsVersion]);
 
   // Hydrate cached extraction for the same book + selected TOC pages
   useEffect(() => {
@@ -385,21 +422,51 @@ export function Step2AI({ state, updateState, onNext, onBack }: Props) {
       },
     ];
 
-    try {
-      const resp = await fetch(`${baseUrl}/v1/chat/completions`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
+    const isResponses = protocol === "responses";
+
+    const endpoint = isResponses
+      ? `${baseUrl}/v1/responses`
+      : `${baseUrl}/v1/chat/completions`;
+
+    const requestBody = isResponses
+      ? {
+          model,
+          instructions: SYSTEM_PROMPT,
+          input: [
+            {
+              role: "user",
+              content: [
+                ...imageBlocks.map((b) => ({
+                  type: "input_image" as const,
+                  image_url: (b as { image_url: { url: string } }).image_url.url,
+                })),
+                {
+                  type: "input_text" as const,
+                  text: `These are ${imageBlocks.length} page(s) from a document's table of contents. Extract all TOC entries as a JSON array following the system instructions.`,
+                },
+              ],
+            },
+          ],
+          stream: true,
+          store: false,
+        }
+      : {
           model,
           messages,
           stream: true,
           stream_options: {
             include_usage: true,
           },
-        }),
+        };
+
+    try {
+      const resp = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify(requestBody),
       });
 
       if (!resp.ok) {
@@ -411,11 +478,7 @@ export function Step2AI({ state, updateState, onNext, onBack }: Props) {
         throw new Error("No response body from AI API");
       }
 
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-
       let text = "";
-      let sseBuf = "";
       let currentUsage: AIUsage = {
         promptTokens: null,
         completionTokens: null,
@@ -423,30 +486,21 @@ export function Step2AI({ state, updateState, onNext, onBack }: Props) {
         costUsd: null,
       };
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      await consumeSSE(resp, (packet) => {
+        const p = packet as Record<string, unknown>;
+        const type = p.type;
 
-        sseBuf += decoder.decode(value, { stream: true });
-        const lines = sseBuf.split("\n");
-        sseBuf = lines.pop() ?? "";
-
-        for (const lineRaw of lines) {
-          const line = lineRaw.trim();
-          if (!line.startsWith("data:")) continue;
-          const data = line.slice(5).trim();
-          if (!data || data === "[DONE]") continue;
-
-          const packet = JSON.parse(data) as Record<string, unknown>;
+        // ---- chat-completions chunk ----
+        if (type === undefined || type === "chat.completion.chunk") {
           currentUsage = mergeUsage(currentUsage, packet);
           setUsage(currentUsage);
 
-          const maybeError = packet.error as Record<string, unknown> | undefined;
+          const maybeError = p.error as Record<string, unknown> | undefined;
           if (maybeError) {
             throw new Error(String(maybeError.message ?? "AI streaming error"));
           }
 
-          const choices = packet.choices as Array<Record<string, unknown>> | undefined;
+          const choices = p.choices as Array<Record<string, unknown>> | undefined;
           const delta = choices?.[0]?.delta as Record<string, unknown> | undefined;
           const content = delta?.content;
 
@@ -474,8 +528,59 @@ export function Step2AI({ state, updateState, onNext, onBack }: Props) {
               }
             }
           }
+          return;
         }
-      }
+
+        // ---- openai-responses events ----
+        if (type === "response.output_text.delta") {
+          const delta = p.delta;
+          if (typeof delta === "string") {
+            text += delta;
+            setRawResponse(text);
+            const partial = parsePartialAIResponse(text);
+            if (partial.length > 0) {
+              setEntries(partial);
+              updateState({ tocEntries: partial, aiDone: true });
+            }
+          }
+          return;
+        }
+
+        if (type === "response.usage") {
+          currentUsage = mergeUsage(currentUsage, { usage: p });
+          setUsage(currentUsage);
+          return;
+        }
+
+        if (type === "response.completed" || type === "response.incomplete") {
+          const response = (p.response ?? {}) as Record<string, unknown>;
+          const finalText = response.output_text;
+          if (typeof finalText === "string" && finalText.length > text.length) {
+            text = finalText;
+            setRawResponse(text);
+            const partial = parsePartialAIResponse(text);
+            if (partial.length > 0) {
+              setEntries(partial);
+              updateState({ tocEntries: partial, aiDone: true });
+            }
+          }
+          if (response.usage) {
+            currentUsage = mergeUsage(currentUsage, { usage: response.usage });
+            setUsage(currentUsage);
+          }
+          return;
+        }
+
+        if (type === "response.failed") {
+          const response = (p.response ?? {}) as Record<string, unknown>;
+          const err = (response.error ?? {}) as Record<string, unknown>;
+          throw new Error(String(err.message ?? "AI streaming error"));
+        }
+
+        if (type === "error") {
+          throw new Error(String(p.message ?? "AI streaming error"));
+        }
+      });
 
       const parsed = parseAIResponse(text);
       setEntries(parsed);

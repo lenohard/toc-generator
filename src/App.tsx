@@ -34,6 +34,8 @@ export default function App() {
   const [updateBusy, setUpdateBusy] = useState(false);
   const [updateStatus, setUpdateStatus] = useState("");
   const [showSettings, setShowSettings] = useState(false);
+  // Bumped on Settings save so mounted steps re-sync model/protocol from localStorage
+  const [settingsVersion, setSettingsVersion] = useState(0);
 
   const updateState = (partial: Partial<AppState>) => {
     setState((prev) => ({ ...prev, ...partial }));
@@ -290,6 +292,7 @@ export default function App() {
             updateState={updateState}
             onNext={() => goToStep(3)}
             onBack={() => goToStep(1)}
+            settingsVersion={settingsVersion}
           />
         )}
         {step === 3 && (
@@ -317,7 +320,12 @@ export default function App() {
         onLoadTask={loadTask}
       />
 
-      {showSettings && <Settings onClose={() => setShowSettings(false)} />}
+      {showSettings && (
+        <Settings
+          onClose={() => setShowSettings(false)}
+          onSaved={() => setSettingsVersion((v) => v + 1)}
+        />
+      )}
     </div>
   );
 }
