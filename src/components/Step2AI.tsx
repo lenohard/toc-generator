@@ -194,8 +194,8 @@ export function Step2AI({ state, updateState, onNext, onBack, settingsVersion }:
   const [model, setModel] = useState(
     localStorage.getItem("ai_model") || DEFAULT_MODEL
   );
-  const [protocol, setProtocol] = useState<"chat" | "responses">(
-    localStorage.getItem("ai_protocol") === "responses" ? "responses" : DEFAULT_PROTOCOL
+  const [protocol, setProtocol] = useState<"chat" | "responses" | "anthropic">(
+    (localStorage.getItem("ai_protocol") as "chat" | "responses" | "anthropic") || DEFAULT_PROTOCOL
   );
   const baseUrl = localStorage.getItem("ai_base_url") || DEFAULT_BASE_URL;
   const [models, setModels] = useState<string[]>([]);
@@ -302,7 +302,7 @@ export function Step2AI({ state, updateState, onNext, onBack, settingsVersion }:
     const savedModel = localStorage.getItem("ai_model");
     if (savedModel) setModel(savedModel);
     setProtocol(
-      localStorage.getItem("ai_protocol") === "responses" ? "responses" : DEFAULT_PROTOCOL
+      (localStorage.getItem("ai_protocol") as "chat" | "responses" | "anthropic") || DEFAULT_PROTOCOL
     );
   }, [settingsVersion]);
 
@@ -423,10 +423,13 @@ export function Step2AI({ state, updateState, onNext, onBack, settingsVersion }:
     ];
 
     const isResponses = protocol === "responses";
+    const isAnthropic = protocol === "anthropic";
 
     const endpoint = isResponses
       ? `${baseUrl}/v1/responses`
-      : `${baseUrl}/v1/chat/completions`;
+      : isAnthropic
+        ? `${baseUrl}/v1/messages`
+        : `${baseUrl}/v1/chat/completions`;
 
     const requestBody = isResponses
       ? {
@@ -450,22 +453,59 @@ export function Step2AI({ state, updateState, onNext, onBack, settingsVersion }:
           stream: true,
           store: false,
         }
-      : {
-          model,
-          messages,
-          stream: true,
-          stream_options: {
-            include_usage: true,
-          },
-        };
+      : isAnthropic
+        ? {
+            model,
+            system: SYSTEM_PROMPT,
+            max_tokens: 4096,
+            messages: [
+              {
+                role: "user",
+                content: [
+                  ...imageBlocks.map((b) => {
+                    const url = (b as { image_url: { url: string } }).image_url.url;
+                    const match = url.match(/^data:(.+?);base64,(.+)$/);
+                    return {
+                      type: "image" as const,
+                      source: {
+                        type: "base64" as const,
+                        media_type: match?.[1] ?? "image/png",
+                        data: match?.[2] ?? "",
+                      },
+                    };
+                  }),
+                  {
+                    type: "text" as const,
+                    text: `These are ${imageBlocks.length} page(s) from a document's table of contents. Extract all TOC entries as a JSON array following the system instructions.`,
+                  },
+                ],
+              },
+            ],
+            stream: true,
+          }
+        : {
+            model,
+            messages,
+            stream: true,
+            stream_options: {
+              include_usage: true,
+            },
+          };
 
     try {
       const resp = await fetch(endpoint, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-        },
+        headers: isAnthropic
+          ? {
+              "Content-Type": "application/json",
+              "x-api-key": apiKey,
+              "anthropic-version": "2023-06-01",
+              Authorization: `Bearer ${apiKey}`,
+            }
+          : {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${apiKey}`,
+            },
         body: JSON.stringify(requestBody),
       });
 
@@ -531,6 +571,27 @@ export function Step2AI({ state, updateState, onNext, onBack, settingsVersion }:
           return;
         }
 
+        // ---- anthropic-messages events ----
+        if (type === "content_block_delta") {
+          const delta = (p.delta ?? {}) as Record<string, unknown>;
+          if (delta.type === "text_delta" && typeof delta.text === "string") {
+            text += delta.text;
+            setRawResponse(text);
+            const partial = parsePartialAIResponse(text);
+            if (partial.length > 0) {
+              setEntries(partial);
+              updateState({ tocEntries: partial, aiDone: true });
+            }
+          }
+          return;
+        }
+
+        if (type === "message_delta") {
+          currentUsage = mergeUsage(currentUsage, packet);
+          setUsage(currentUsage);
+          return;
+        }
+
         // ---- openai-responses events ----
         if (type === "response.output_text.delta") {
           const delta = p.delta;
@@ -578,7 +639,8 @@ export function Step2AI({ state, updateState, onNext, onBack, settingsVersion }:
         }
 
         if (type === "error") {
-          throw new Error(String(p.message ?? "AI streaming error"));
+          const err = (p.error ?? {}) as Record<string, unknown>;
+          throw new Error(String(err.message ?? p.message ?? "AI streaming error"));
         }
       });
 

@@ -20,8 +20,8 @@ export function Settings({ onClose, onSaved }: Props) {
   const [apiKey, setApiKey] = useState(
     localStorage.getItem("ai_gateway_key") || ""
   );
-  const [protocol, setProtocol] = useState<"chat" | "responses">(
-    localStorage.getItem("ai_protocol") === "responses" ? "responses" : "chat"
+  const [protocol, setProtocol] = useState<"chat" | "responses" | "anthropic">(
+    (localStorage.getItem("ai_protocol") as "chat" | "responses" | "anthropic") || "chat"
   );
   const [saved, setSaved] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -70,12 +70,19 @@ export function Settings({ onClose, onSaved }: Props) {
     setTesting(true);
     setTestResult(null);
     try {
-      const endpoint =
-        protocol === "responses"
+      const isAnthropic = protocol === "anthropic";
+      const endpoint = isAnthropic
+        ? `${baseUrl}/v1/messages`
+        : protocol === "responses"
           ? `${baseUrl}/v1/responses`
           : `${baseUrl}/v1/chat/completions`;
-      const body =
-        protocol === "responses"
+      const body = isAnthropic
+        ? {
+            model,
+            max_tokens: 16,
+            messages: [{ role: "user", content: "Say OK" }],
+          }
+        : protocol === "responses"
           ? {
               model,
               input: [
@@ -96,15 +103,23 @@ export function Settings({ onClose, onSaved }: Props) {
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${apiKey}`,
+          ...(isAnthropic
+            ? { "x-api-key": apiKey, "anthropic-version": "2023-06-01" }
+            : {}),
         },
         body: JSON.stringify(body),
       });
       if (resp.ok) {
         const data = await resp.json();
-        const reply =
-          protocol === "responses"
-            ? data.output_text || data.output?.[0]?.content?.[0]?.text
-            : data.choices?.[0]?.message?.content;
+        let reply: unknown = null;
+        if (isAnthropic) {
+          const content = data.content as Array<Record<string, unknown>> | undefined;
+          reply = content?.find((b) => b.type === "text")?.text;
+        } else if (protocol === "responses") {
+          reply = data.output_text || data.output?.[0]?.content?.[0]?.text;
+        } else {
+          reply = data.choices?.[0]?.message?.content;
+        }
         const text = typeof reply === "string" ? reply : "(no content)";
         setTestResult({ ok: true, msg: `Success: ${text.slice(0, 50)}` });
       } else {
@@ -201,17 +216,18 @@ export function Settings({ onClose, onSaved }: Props) {
             <select
               value={protocol}
               onChange={(e) =>
-                setProtocol(e.target.value as "chat" | "responses")
+                setProtocol(e.target.value as "chat" | "responses" | "anthropic")
               }
               className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-200 focus:outline-none focus:border-indigo-500"
             >
               <option value="chat">chat-completions (/v1/chat/completions)</option>
               <option value="responses">openai-responses (/v1/responses)</option>
+              <option value="anthropic">anthropic-messages (/v1/messages)</option>
             </select>
             <p className="text-xs text-zinc-500 mt-1">
-              Request protocol used for AI extraction.
-              Note: some gateways (e.g. opencode zen/go) require a bare model ID
-              (no provider prefix) for the responses endpoint.
+              Request protocol used for AI extraction. The messages endpoint uses
+              Anthropic-style auth (x-api-key) — some gateways (e.g. opencode
+              zen/go) also require a bare model ID (no provider prefix).
             </p>
           </div>
 
@@ -228,7 +244,7 @@ export function Settings({ onClose, onSaved }: Props) {
               className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-200 focus:outline-none focus:border-indigo-500 placeholder-zinc-600"
             />
             <p className="text-xs text-zinc-500 mt-1">
-              Bearer token for API authentication
+              API key for authentication (messages protocol uses x-api-key)
             </p>
           </div>
 
@@ -252,7 +268,7 @@ export function Settings({ onClose, onSaved }: Props) {
           <div className="bg-zinc-800 rounded-lg p-3 text-xs">
             <span className="text-zinc-500">Requests go to: </span>
             <span className="text-zinc-300 break-all">
-              {baseUrl}/{protocol === "responses" ? "v1/responses" : "v1/chat/completions"}
+              {baseUrl}/{protocol === "responses" ? "v1/responses" : protocol === "anthropic" ? "v1/messages" : "v1/chat/completions"}
             </span>
           </div>
         </div>
