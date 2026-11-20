@@ -117,6 +117,6 @@ export interface AppState {
   metadata: SessionMetadata;
   tocEntries: TocEntry[];
   outputFile: string | null;
-  apiKey: string; // Vercel AI Gateway key
+  apiKey: string; // Optional AI gateway key
   aiRunInfo: AIRunInfo | null;
 }

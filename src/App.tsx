@@ -33,6 +33,9 @@ export default function App() {
   const [showHistory, setShowHistory] = useState(false);
   const [updateBusy, setUpdateBusy] = useState(false);
   const [updateStatus, setUpdateStatus] = useState("");
+  const [pendingUpdate, setPendingUpdate] = useState<
+    NonNullable<Awaited<ReturnType<typeof check>>> | null
+  >(null);
   const [showSettings, setShowSettings] = useState(false);
   // Bumped on Settings save so mounted steps re-sync model/protocol from localStorage
   const [settingsVersion, setSettingsVersion] = useState(0);
@@ -61,20 +64,11 @@ export default function App() {
 
     refreshDeps(true).catch(() => undefined);
 
-    // Auto-check for updates on startup (silent, no blocking)
+    // Auto-check for updates on startup (silent unless an update is available)
     check().then((update) => {
       if (update) {
-        const ok = window.confirm(
-          `New version ${update.version} found. Download and install now?`
-        );
-        if (ok) {
-          setUpdateStatus("Downloading update...");
-          update.downloadAndInstall().then(() => {
-            setUpdateStatus("Update installed. Please restart app.");
-          });
-        } else {
-          setUpdateStatus(`Update ${update.version} available`);
-        }
+        setPendingUpdate(update);
+        setUpdateStatus(`Version ${update.version} is available`);
       }
     }).catch(() => undefined);
   }, [refreshDeps]);
@@ -135,23 +129,38 @@ export default function App() {
         return;
       }
 
-      const ok = window.confirm(
-        `New version ${update.version} found. Download and install now?`
-      );
-      if (!ok) {
-        setUpdateStatus(`Update ${update.version} available`);
-        return;
-      }
-
-      setUpdateStatus("Downloading update...");
-      await update.downloadAndInstall();
-      setUpdateStatus("Update installed. Please restart app.");
+      setPendingUpdate(update);
+      setUpdateStatus(`Version ${update.version} is available`);
     } catch (e) {
       setUpdateStatus(`Update check failed: ${String(e)}`);
     } finally {
       setUpdateBusy(false);
     }
   };
+
+  const installUpdate = async () => {
+    if (!pendingUpdate || updateBusy) return;
+    setUpdateBusy(true);
+    setUpdateStatus(`Downloading version ${pendingUpdate.version}...`);
+    try {
+      await pendingUpdate.downloadAndInstall();
+      setUpdateStatus("Update installed. Restart OCR Bookmarker to finish.");
+      setPendingUpdate(null);
+    } catch (e) {
+      setUpdateStatus(`Update failed: ${String(e)}`);
+    } finally {
+      setUpdateBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!pendingUpdate) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !updateBusy) setPendingUpdate(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [pendingUpdate, updateBusy]);
 
   const goToStep = (s: Step) => setStep(s);
 
@@ -162,18 +171,18 @@ export default function App() {
   ];
 
   return (
-    <div className="flex flex-col h-screen bg-zinc-950">
-      {/* Title bar / Header */}
-      <div
-        className="flex items-center gap-4 px-6 py-3 bg-zinc-900 border-b border-zinc-800 select-none"
+    <div className="flex h-dvh w-full flex-col overflow-hidden bg-zinc-950 text-zinc-100">
+      <header
+        className="flex h-14 flex-shrink-0 items-center gap-3 border-b border-zinc-800 bg-zinc-900 px-4 select-none"
         data-tauri-drag-region
       >
-        <div className="flex items-center gap-2" data-tauri-drag-region>
+        <div className="flex flex-shrink-0 items-center gap-2" data-tauri-drag-region>
           <svg
-            className="w-5 h-5 text-indigo-400"
+            className="h-5 w-5 text-indigo-400"
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
+            aria-hidden="true"
           >
             <path
               strokeLinecap="round"
@@ -182,102 +191,104 @@ export default function App() {
               d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
             />
           </svg>
-          <span className="text-sm font-semibold text-zinc-200">
+          <span className="hidden text-sm font-semibold tracking-tight text-zinc-100 lg:inline">
             OCR Bookmarker
           </span>
         </div>
 
-        {/* Step indicator */}
-        <div className="flex items-center gap-1 ml-4">
-          {steps.map((s, i) => (
-            <div key={s.num} className="flex items-center">
-              <button
-                onClick={() => {
-                  if (
-                    s.num <= step ||
-                    (s.num === 2 && state.selectedPages.length > 0) ||
-                    (s.num === 3 && state.aiDone)
-                  ) {
-                    goToStep(s.num);
-                  }
-                }}
-                className={`flex items-center gap-1.5 px-3 py-1 rounded text-xs font-medium transition-colors ${
-                  step === s.num
-                    ? "bg-indigo-600 text-white"
-                    : s.num < step ||
-                      (s.num === 2 && state.selectedPages.length > 0) ||
-                      (s.num === 3 && state.aiDone)
-                    ? "text-zinc-300 hover:bg-zinc-800 cursor-pointer"
-                    : "text-zinc-600 cursor-default"
-                }`}
-              >
-                <span
-                  className={`w-4 h-4 rounded-full flex items-center justify-center text-xs ${
-                    step === s.num
-                      ? "bg-white/20"
-                      : s.num < step
-                      ? "bg-green-500/20 text-green-400"
-                      : "bg-zinc-700"
+        <nav className="flex min-w-0 flex-1 items-center justify-center" aria-label="Workflow">
+          {steps.map((s, i) => {
+            const available =
+              s.num <= step ||
+              (s.num === 2 && state.selectedPages.length > 0) ||
+              (s.num === 3 && state.aiDone);
+            const active = step === s.num;
+            return (
+              <div key={s.num} className="flex min-w-0 items-center">
+                <button
+                  type="button"
+                  onClick={() => available && goToStep(s.num)}
+                  disabled={!available}
+                  aria-current={active ? "step" : undefined}
+                  className={`flex h-8 items-center gap-2 rounded-md px-2.5 text-xs font-medium transition-colors ${
+                    active
+                      ? "bg-indigo-600 text-white shadow-sm"
+                      : available
+                        ? "text-zinc-300 hover:bg-zinc-800 hover:text-white"
+                        : "cursor-default text-zinc-600"
                   }`}
                 >
-                  {s.num < step ? "✓" : s.num}
-                </span>
-                {s.label}
-              </button>
-              {i < steps.length - 1 && (
-                <span className="text-zinc-700 mx-1">›</span>
-              )}
-            </div>
-          ))}
-        </div>
+                  <span
+                    className={`flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-[11px] ${
+                      active
+                        ? "bg-white/20 text-white"
+                        : s.num < step
+                          ? "bg-emerald-500/15 text-emerald-400"
+                          : "bg-zinc-800 text-zinc-500"
+                    }`}
+                    aria-hidden="true"
+                  >
+                    {s.num < step ? "✓" : s.num}
+                  </span>
+                  <span className="whitespace-nowrap">{s.label}</span>
+                </button>
+                {i < steps.length - 1 && (
+                  <span className="mx-1 text-zinc-700" aria-hidden="true">›</span>
+                )}
+              </div>
+            );
+          })}
+        </nav>
 
-        <div className="flex items-center gap-4 ml-auto">
-        <button
-          onClick={() => setShowSettings(true)}
-          className="flex items-center gap-1.5 text-xs text-zinc-300 hover:text-white"
-        >
-          <span>⚙</span>
-          <span>Settings</span>
-        </button>
-
-        <button
-          onClick={() => setShowHistory(true)}
-          className="flex items-center gap-1.5 text-xs text-zinc-300 hover:text-white"
-        >
-          <span>🕘</span>
-          <span>Task History</span>
-        </button>
-
-        <button
-          onClick={checkUpdates}
-          disabled={updateBusy}
-          className="flex items-center gap-1.5 text-xs text-zinc-300 hover:text-white disabled:opacity-50"
-        >
-          <span>{updateBusy ? "⟳" : "⬆"}</span>
-          <span>{updateBusy ? "Checking..." : "Check Update"}</span>
-        </button>
-
-        {/* Deps warning indicator */}
-        {deps && deps.some((d) => !d.found) && (
+        <div className="flex flex-shrink-0 items-center gap-1">
+          {deps && deps.some((d) => !d.found) && (
+            <button
+              type="button"
+              onClick={() => setShowDepsWarning(true)}
+              className="mr-1 flex h-8 items-center gap-1.5 rounded-md px-2 text-xs text-amber-400 hover:bg-amber-950/50 hover:text-amber-300"
+              title="Missing external tools"
+            >
+              <span aria-hidden="true">⚠</span>
+              <span className="hidden xl:inline">Missing tools</span>
+            </button>
+          )}
           <button
-            onClick={() => setShowDepsWarning(true)}
-            className="flex items-center gap-1.5 text-xs text-amber-400 hover:text-amber-300"
+            type="button"
+            onClick={() => setShowSettings(true)}
+            className="flex h-8 items-center gap-1.5 rounded-md px-2 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+            title="Settings"
+            aria-label="Settings"
           >
-            <span>⚠</span>
-            <span>Missing tools</span>
+            <span aria-hidden="true">⚙</span>
+            <span className="hidden xl:inline">Settings</span>
           </button>
-        )}
+          <button
+            type="button"
+            onClick={() => setShowHistory(true)}
+            className="flex h-8 items-center gap-1.5 rounded-md px-2 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+            title="Task history"
+            aria-label="Task history"
+          >
+            <span aria-hidden="true">◷</span>
+            <span className="hidden xl:inline">History</span>
+          </button>
+          <button
+            type="button"
+            onClick={checkUpdates}
+            disabled={updateBusy}
+            className="flex h-8 items-center gap-1.5 rounded-md px-2 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 disabled:cursor-wait disabled:opacity-50"
+            title="Check for updates"
+            aria-label="Check for updates"
+          >
+            <span className={updateBusy ? "animate-spin" : ""} aria-hidden="true">
+              {updateBusy ? "⟳" : "↑"}
+            </span>
+            <span className="hidden xl:inline">{updateBusy ? "Checking…" : "Update"}</span>
+          </button>
         </div>
-      </div>
+      </header>
 
-      {updateStatus && (
-        <div className="px-4 py-1 text-xs border-b border-zinc-800 bg-zinc-900 text-zinc-400">
-          {updateStatus}
-        </div>
-      )}
-
-      {/* Main content */}
-      <div className="flex-1 min-h-0">
+      <main className="min-h-0 flex-1 overflow-hidden">
         {step === 1 && (
           <Step1Select
             state={state}
@@ -303,9 +314,28 @@ export default function App() {
             onStartNewTask={startNewTask}
           />
         )}
-      </div>
+      </main>
 
-      {/* Deps warning modal */}
+      {updateStatus && (
+        <div
+          className="fixed bottom-4 left-1/2 z-40 flex max-w-[calc(100vw-32px)] -translate-x-1/2 items-center gap-3 rounded-lg border border-zinc-700 bg-zinc-900/95 px-4 py-2.5 text-xs text-zinc-300 shadow-2xl backdrop-blur"
+          role="status"
+          aria-live="polite"
+        >
+          <span className="min-w-0 break-words">{updateStatus}</span>
+          {!pendingUpdate && (
+            <button
+              type="button"
+              onClick={() => setUpdateStatus("")}
+              className="flex-shrink-0 rounded px-1 text-zinc-500 hover:text-zinc-200"
+              aria-label="Dismiss update status"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+      )}
+
       {showDepsWarning && deps && (
         <DepsWarning
           deps={deps}
@@ -314,17 +344,62 @@ export default function App() {
         />
       )}
 
-      <TaskHistoryDrawer 
-        open={showHistory} 
-        onClose={() => setShowHistory(false)} 
+      <TaskHistoryDrawer
+        open={showHistory}
+        onClose={() => setShowHistory(false)}
         onLoadTask={loadTask}
       />
 
       {showSettings && (
         <Settings
+          active={!pendingUpdate}
           onClose={() => setShowSettings(false)}
           onSaved={() => setSettingsVersion((v) => v + 1)}
         />
+      )}
+
+      {pendingUpdate && (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-6 backdrop-blur-sm"
+          onClick={() => !updateBusy && setPendingUpdate(null)}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="update-title"
+            className="flex h-[260px] w-[440px] max-w-full flex-col rounded-xl border border-zinc-700 bg-zinc-900 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="border-b border-zinc-800 px-5 py-4">
+              <h2 id="update-title" className="text-sm font-semibold text-zinc-100">
+                Install version {pendingUpdate.version}?
+              </h2>
+              <p className="mt-1 text-xs text-zinc-500">OCR Bookmarker update</p>
+            </div>
+            <div className="flex-1 px-5 py-4 text-xs leading-relaxed text-zinc-400">
+              Download and install the update now. Restart the app after installation to use the new version.
+            </div>
+            <div className="flex justify-end gap-2 border-t border-zinc-800 px-5 py-4">
+              <button
+                type="button"
+                autoFocus
+                onClick={() => setPendingUpdate(null)}
+                disabled={updateBusy}
+                className="rounded-md px-3 py-2 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 disabled:opacity-50"
+              >
+                Not now
+              </button>
+              <button
+                type="button"
+                onClick={installUpdate}
+                disabled={updateBusy}
+                className="min-w-28 rounded-md bg-indigo-600 px-4 py-2 text-xs font-medium text-white hover:bg-indigo-500 disabled:cursor-wait disabled:bg-zinc-700"
+              >
+                {updateBusy ? "Installing…" : "Download & install"}
+              </button>
+            </div>
+          </section>
+        </div>
       )}
     </div>
   );

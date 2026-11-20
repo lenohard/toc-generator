@@ -18,9 +18,46 @@ interface MergeLogEvent {
   success: boolean;
 }
 
+function Toggle({
+  checked,
+  onChange,
+  disabled,
+  danger = false,
+  label,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  disabled?: boolean;
+  danger?: boolean;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={`relative h-5 w-9 flex-shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+        checked ? (danger ? "bg-red-700" : "bg-indigo-600") : "bg-zinc-700"
+      }`}
+    >
+      <span
+        className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${
+          checked ? "translate-x-4" : "translate-x-0.5"
+        }`}
+        aria-hidden="true"
+      />
+    </button>
+  );
+}
+
 export function Step3Merge({ state, updateState, onBack, onStartNewTask }: Props) {
   const [tocEntries, setTocEntries] = useState<TocEntry[]>([]);
   const [tocError, setTocError] = useState("");
+  const [tocLoading, setTocLoading] = useState(true);
+  const [tocRevision, setTocRevision] = useState(0);
   const [outputPath, setOutputPath] = useState("");
   const [mergeOriginal, setMergeOriginal] = useState(false);
   const [deleteOriginal, setDeleteOriginal] = useState(true);
@@ -35,6 +72,8 @@ export function Step3Merge({ state, updateState, onBack, onStartNewTask }: Props
   const [previewPage, setPreviewPage] = useState<number | null>(null);
   const [previewImage, setPreviewImage] = useState<string>("");
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState("");
+  const [showMergeConfirm, setShowMergeConfirm] = useState(false);
 
   // Auto-generate default output path
   useEffect(() => {
@@ -48,13 +87,16 @@ export function Step3Merge({ state, updateState, onBack, onStartNewTask }: Props
   // Load TOC preview
   useEffect(() => {
     if (!state.sessionId) return;
+    setTocLoading(true);
+    setTocError("");
     invoke<TocEntry[]>("preview_toc", { sessionId: state.sessionId })
       .then((entries) => {
         setTocEntries(entries);
         setTocError("");
       })
-      .catch((err) => setTocError(String(err)));
-  }, [state.sessionId]);
+      .catch((err) => setTocError(String(err)))
+      .finally(() => setTocLoading(false));
+  }, [state.sessionId, tocRevision]);
 
   // Listen for merge logs
   useEffect(() => {
@@ -92,16 +134,26 @@ export function Step3Merge({ state, updateState, onBack, onStartNewTask }: Props
   }, [logs]);
 
   useEffect(() => {
-    if (previewPage === null) return;
+    if (previewPage === null && !showMergeConfirm) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
+      if (e.key !== "Escape") return;
+      if (showMergeConfirm) {
+        setShowMergeConfirm(false);
+      } else {
         setPreviewPage(null);
         setPreviewImage("");
+        setPreviewError("");
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [previewPage]);
+  }, [previewPage, showMergeConfirm]);
+
+  const closePreview = () => {
+    setPreviewPage(null);
+    setPreviewImage("");
+    setPreviewError("");
+  };
 
   const pickOutputPath = async () => {
     const selected = await save({
@@ -113,6 +165,11 @@ export function Step3Merge({ state, updateState, onBack, onStartNewTask }: Props
       ],
     });
     if (selected) setOutputPath(selected);
+  };
+
+  const requestMerge = () => {
+    if (deleteOriginal) setShowMergeConfirm(true);
+    else void runMerge();
   };
 
   const runMerge = async () => {
@@ -206,6 +263,7 @@ export function Step3Merge({ state, updateState, onBack, onStartNewTask }: Props
 
     setPreviewPage(page);
     setPreviewImage("");
+    setPreviewError("");
     setPreviewLoading(true);
 
     try {
@@ -219,7 +277,9 @@ export function Step3Merge({ state, updateState, onBack, onStartNewTask }: Props
         setPreviewImage(`data:${result.mime};base64,${result.data}`);
       }
     } catch (e) {
-      setLogs((prev) => [...prev, `Preview error (page ${page}): ${String(e)}`]);
+      const message = String(e);
+      setPreviewError(message);
+      setLogs((prev) => [...prev, `Preview error (page ${page}): ${message}`]);
     } finally {
       setPreviewLoading(false);
     }
@@ -265,13 +325,28 @@ export function Step3Merge({ state, updateState, onBack, onStartNewTask }: Props
           )}
         </div>
 
-        <div className="flex-1 overflow-y-auto bg-zinc-950">
-          {tocError ? (
-            <div className="p-4 text-sm text-red-400">{tocError}</div>
+        <div className="min-h-0 flex-1 overflow-y-auto bg-zinc-950">
+          {tocLoading ? (
+            <div className="mt-12 text-center text-sm text-zinc-500" role="status">
+              <span className="mr-2 inline-block animate-spin" aria-hidden="true">⟳</span>
+              Loading TOC preview…
+            </div>
+          ) : tocError ? (
+            <div className="m-4 rounded-lg border border-red-900/70 bg-red-950/30 p-4" role="alert">
+              <p className="text-sm font-medium text-red-300">Could not load TOC preview</p>
+              <p className="mt-1 break-words text-xs text-red-400">{tocError}</p>
+              <button
+                type="button"
+                onClick={() => setTocRevision((revision) => revision + 1)}
+                className="mt-3 rounded-md bg-zinc-800 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-700"
+              >
+                Retry preview
+              </button>
+            </div>
           ) : tocEntries.length === 0 ? (
-            <div className="text-center text-zinc-700 mt-12 text-sm">
-              <div className="text-3xl mb-3">📑</div>
-              <div>Loading TOC preview...</div>
+            <div className="mt-12 text-center text-sm text-zinc-500">
+              <div className="mb-3 text-3xl" aria-hidden="true">📑</div>
+              <div>No TOC entries are available to merge.</div>
             </div>
           ) : (
             <table className="w-full text-xs">
@@ -286,10 +361,15 @@ export function Step3Merge({ state, updateState, onBack, onStartNewTask }: Props
                 {tocEntries.map((entry, i) => (
                   <tr
                     key={i}
+                    tabIndex={0}
                     onClick={() => openEntryPreview(entry.page)}
-                    className={`border-t border-zinc-800/50 hover:bg-zinc-800/20 cursor-pointer ${
-                      entry.level === 1 ? "" : ""
-                    }`}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        void openEntryPreview(entry.page);
+                      }
+                    }}
+                    className="cursor-pointer border-t border-zinc-800/50 hover:bg-zinc-800/20 focus:bg-zinc-800/30 focus:outline-none"
                     title={`Open page ${entry.page} for quick verification`}
                   >
                     <td
@@ -355,50 +435,35 @@ export function Step3Merge({ state, updateState, onBack, onStartNewTask }: Props
           </div>
 
           {/* Options */}
-          <div className="space-y-3">
-            <div>
-              <label className="flex items-center gap-2.5 cursor-pointer">
-                <div
-                  onClick={() => setDeleteOriginal(!deleteOriginal)}
-                  className={`w-9 h-5 rounded-full transition-colors relative flex-shrink-0 ${
-                    deleteOriginal ? "bg-red-700" : "bg-zinc-700"
-                  }`}
-                >
-                  <div
-                    className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${
-                      deleteOriginal ? "translate-x-4" : "translate-x-0.5"
-                    }`}
-                  />
-                </div>
-                <span className="text-xs text-zinc-300">
-                  Delete original file
-                </span>
-              </label>
-              <p className="text-xs text-zinc-600 mt-1 ml-11">
-                Remove source file after successful merge
+          <div className="divide-y divide-zinc-800 rounded-lg border border-zinc-800 px-3">
+            <div className="py-3">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-xs font-medium text-zinc-300">Delete original file</span>
+                <Toggle
+                  checked={deleteOriginal}
+                  onChange={setDeleteOriginal}
+                  disabled={running}
+                  danger
+                  label="Delete original file after merge"
+                />
+              </div>
+              <p className="mt-1 pr-10 text-xs text-zinc-500">
+                Remove the source only after a successful merge
               </p>
             </div>
 
-            <div>
-              <label className="flex items-center gap-2.5 cursor-pointer">
-                <div
-                  onClick={() => setMergeOriginal(!mergeOriginal)}
-                  className={`w-9 h-5 rounded-full transition-colors relative flex-shrink-0 ${
-                    mergeOriginal ? "bg-indigo-600" : "bg-zinc-700"
-                  }`}
-                >
-                  <div
-                    className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${
-                      mergeOriginal ? "translate-x-4" : "translate-x-0.5"
-                    }`}
-                  />
-                </div>
-                <span className="text-xs text-zinc-300">
-                  Keep existing bookmarks
-                </span>
-              </label>
-              <p className="text-xs text-zinc-600 mt-1 ml-11">
-                Prepend original {fileLabel} bookmarks before new TOC
+            <div className="py-3">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-xs font-medium text-zinc-300">Keep existing bookmarks</span>
+                <Toggle
+                  checked={mergeOriginal}
+                  onChange={setMergeOriginal}
+                  disabled={running}
+                  label="Keep existing bookmarks"
+                />
+              </div>
+              <p className="mt-1 pr-10 text-xs text-zinc-500">
+                Prepend original {fileLabel} bookmarks before the new TOC
               </p>
             </div>
           </div>
@@ -434,7 +499,9 @@ export function Step3Merge({ state, updateState, onBack, onStartNewTask }: Props
             </label>
             <div
               ref={logRef}
-              className="bg-zinc-950 rounded-lg p-2 h-36 overflow-y-auto terminal text-xs"
+              role="log"
+              aria-live="polite"
+              className="h-36 overflow-y-auto rounded-lg bg-zinc-950 p-2 font-mono text-xs"
             >
               {logs.length === 0 ? (
                 <span className="text-zinc-700">Log output will appear here</span>
@@ -502,8 +569,9 @@ export function Step3Merge({ state, updateState, onBack, onStartNewTask }: Props
             ← Back
           </button>
           <button
-            onClick={runMerge}
-            disabled={running || tocEntries.length === 0 || !outputPath}
+            type="button"
+            onClick={requestMerge}
+            disabled={running || tocLoading || tocEntries.length === 0 || !outputPath}
             className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-700 disabled:text-zinc-500 rounded-lg text-xs font-medium text-white transition-colors flex items-center justify-center gap-2"
           >
             {running ? (
@@ -517,49 +585,111 @@ export function Step3Merge({ state, updateState, onBack, onStartNewTask }: Props
         </div>
       </div>
 
+      {showMergeConfirm && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-6"
+          onClick={() => setShowMergeConfirm(false)}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="merge-confirm-title"
+            className="flex h-[250px] w-[440px] max-w-full flex-col overflow-hidden rounded-xl border border-zinc-700 bg-zinc-900 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="border-b border-zinc-800 px-5 py-4">
+              <h2 id="merge-confirm-title" className="text-sm font-semibold text-zinc-100">
+                Generate and delete the original?
+              </h2>
+              <p className="mt-1 text-xs text-zinc-500">This action cannot be undone</p>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4 text-xs leading-relaxed text-zinc-400">
+              <p>
+                The merged {fileLabel} will be created first. The original source file will then be permanently deleted.
+              </p>
+              <p className="mt-2 break-all font-mono text-zinc-500">{state.filePath}</p>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-zinc-800 px-5 py-4">
+              <button
+                type="button"
+                autoFocus
+                onClick={() => setShowMergeConfirm(false)}
+                className="rounded-md px-3 py-2 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowMergeConfirm(false);
+                  void runMerge();
+                }}
+                className="rounded-md bg-red-700 px-4 py-2 text-xs font-medium text-white hover:bg-red-600"
+              >
+                Generate & delete original
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
       {/* TOC entry page preview modal */}
       {previewPage !== null && (
         <div
-          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
-          onClick={() => {
-            setPreviewPage(null);
-            setPreviewImage("");
-          }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+          onClick={closePreview}
         >
-          <div
-            className="relative max-w-[90vw] max-h-[90vh] bg-zinc-900 border border-zinc-700 rounded-lg overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="entry-preview-title"
+            className="flex h-[80vh] max-h-[820px] w-[80vw] max-w-[1100px] flex-col overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900"
+            onClick={(event) => event.stopPropagation()}
           >
-            <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-700">
-              <span className="text-xs text-zinc-300">Page {previewPage} preview</span>
+            <div className="flex flex-shrink-0 items-center justify-between border-b border-zinc-700 px-3 py-2">
+              <span id="entry-preview-title" className="text-xs text-zinc-300">
+                Page {previewPage} preview
+              </span>
               <button
-                onClick={() => {
-                  setPreviewPage(null);
-                  setPreviewImage("");
-                }}
-                className="text-zinc-400 hover:text-zinc-200 text-sm"
+                type="button"
+                autoFocus
+                onClick={closePreview}
+                aria-label="Close page preview"
+                className="rounded px-2 py-1 text-sm text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
               >
                 ✕
               </button>
             </div>
 
-            <div className="w-[80vw] h-[80vh] bg-zinc-950 flex items-center justify-center">
-              {previewLoading && (
-                <div className="absolute text-xs text-zinc-400 bg-zinc-900/90 px-2 py-1 rounded">
-                  Loading page image...
+            <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-auto bg-zinc-950 p-3">
+              {previewLoading ? (
+                <div className="text-xs text-zinc-400" role="status">
+                  <span className="mr-2 inline-block animate-spin" aria-hidden="true">⟳</span>
+                  Loading page image…
                 </div>
-              )}
-              {previewImage ? (
+              ) : previewError ? (
+                <div className="max-w-md text-center" role="alert">
+                  <p className="text-sm font-medium text-red-300">Could not render this page</p>
+                  <p className="mt-2 break-words text-xs text-red-400">{previewError}</p>
+                  <button
+                    type="button"
+                    onClick={() => void openEntryPreview(previewPage)}
+                    className="mt-3 rounded-md bg-zinc-800 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-700"
+                  >
+                    Retry preview
+                  </button>
+                </div>
+              ) : previewImage ? (
                 <img
                   src={previewImage}
                   alt={`Entry preview page ${previewPage}`}
-                  className="max-w-full max-h-full object-contain"
+                  className="max-h-full max-w-full object-contain"
                 />
               ) : (
-                !previewLoading && <div className="text-zinc-600 text-sm">No preview available</div>
+                <div className="text-sm text-zinc-500">No preview available</div>
               )}
             </div>
-          </div>
+          </section>
         </div>
       )}
     </div>

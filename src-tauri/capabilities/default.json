@@ -20,7 +20,7 @@
     "updater:default",
     {
       "identifier": "http:default",
-      "allow": [{"url": "https://opencode.ai/**"}]
+      "allow": [{"url": "https://opencode.ai/**"}, {"url": "http://127.0.0.1:3425/**"}]
     }
   ]
 }

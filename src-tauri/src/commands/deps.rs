@@ -15,10 +15,14 @@ pub fn check_deps() -> Vec<DepStatus> {
     let tools: Vec<(&str, &str)> = vec![
         ("tesseract", "OCR text recognition"),
         ("pdftoppm", "PDF to image conversion"),
+        ("pdfinfo", "PDF page information"),
+        ("pdftotext", "PDF text extraction"),
         ("pdftk", "PDF bookmark writing"),
         ("gawk", "Bookmark script generation"),
         ("ddjvu", "DjVu to image conversion"),
         ("djvused", "DjVu bookmark writing"),
+        #[cfg(target_os = "linux")]
+        ("pnmtopng", "DjVu image conversion"),
     ];
 
     tools

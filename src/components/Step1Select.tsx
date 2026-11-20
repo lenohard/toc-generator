@@ -24,12 +24,17 @@ export function Step1Select({ state, updateState, onNext, onEditExisting }: Prop
   const [previewPage, setPreviewPage] = useState<number | null>(null);
   const [previewImage, setPreviewImage] = useState<string>("");
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState("");
+  const [fileError, setFileError] = useState("");
+  const [thumbnailError, setThumbnailError] = useState("");
   const gridRef = useRef<HTMLDivElement>(null);
 
   // When file changes, create session if needed, then get page count
   useEffect(() => {
     if (!state.filePath || !state.fileType) return;
     setLoadingCount(true);
+    setFileError("");
+    setThumbnailError("");
     setThumbs(new Map());
     setLoadedUpTo(0);
 
@@ -53,6 +58,7 @@ export function Step1Select({ state, updateState, onNext, onEditExisting }: Prop
       })
       .catch((e) => {
         console.error("get_page_count error:", e);
+        setFileError(`Could not read this document: ${String(e)}`);
         setLoadingCount(false);
       });
   }, [state.filePath, state.fileType]);
@@ -100,6 +106,7 @@ export function Step1Select({ state, updateState, onNext, onEditExisting }: Prop
   const loadBatch = async (from: number, to: number) => {
     if (!state.filePath || !state.fileType) return;
     setLoadingThumbs(true);
+    setThumbnailError("");
     const pages: number[] = [];
     for (let i = from; i <= to; i++) pages.push(i);
 
@@ -118,6 +125,7 @@ export function Step1Select({ state, updateState, onNext, onEditExisting }: Prop
       setLoadedUpTo(to);
     } catch (e) {
       console.error("render thumbnails failed:", e);
+      setThumbnailError(`Could not render pages ${from}–${to}: ${String(e)}`);
     } finally {
       setLoadingThumbs(false);
     }
@@ -181,6 +189,7 @@ export function Step1Select({ state, updateState, onNext, onEditExisting }: Prop
     const thumb = thumbs.get(page);
     setPreviewPage(page);
     setPreviewImage(thumb ?? "");
+    setPreviewError("");
 
     if (!state.filePath || !state.fileType || !state.sessionId) return;
 
@@ -197,6 +206,7 @@ export function Step1Select({ state, updateState, onNext, onEditExisting }: Prop
       }
     } catch (e) {
       console.error("render preview failed:", e);
+      setPreviewError(String(e));
     } finally {
       setPreviewLoading(false);
     }
@@ -226,6 +236,15 @@ export function Step1Select({ state, updateState, onNext, onEditExisting }: Prop
               onDrop={handleDrop}
               onDragOver={(e) => e.preventDefault()}
               onClick={pickFile}
+              role="button"
+              tabIndex={0}
+              aria-label={fileName ? `Replace ${fileName}` : "Choose a PDF or DjVu file"}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  void pickFile();
+                }
+              }}
               className={`border-2 border-dashed rounded-lg p-4 cursor-pointer transition-colors text-center ${
                 state.filePath
                   ? "border-indigo-600 bg-indigo-950/30"
@@ -254,6 +273,12 @@ export function Step1Select({ state, updateState, onNext, onEditExisting }: Prop
             </div>
           </div>
 
+          {fileError && (
+            <div className="mb-4 rounded-lg border border-red-900 bg-red-950/50 p-3 text-xs leading-relaxed break-words text-red-400" role="alert">
+              {fileError}
+            </div>
+          )}
+
           {/* Existing bookmarks banner */}
           {existingTocLoading && (
             <div className="mb-4 text-xs text-zinc-600 animate-pulse">Checking for existing bookmarks...</div>
@@ -263,7 +288,7 @@ export function Step1Select({ state, updateState, onNext, onEditExisting }: Prop
               <div className="flex items-start justify-between gap-2">
                 <div>
                   <div className="text-xs font-semibold text-amber-400 mb-1">📑 Existing bookmarks found</div>
-                  <div className="text-xs text-amber-700">{existingToc.length} entries already in this file</div>
+                  <div className="text-xs text-amber-200/70">{existingToc.length} entries already in this file</div>
                 </div>
                 <button
                   onClick={() => setShowExistingToc(false)}
@@ -287,7 +312,7 @@ export function Step1Select({ state, updateState, onNext, onEditExisting }: Prop
               >
                 ✎ Edit existing bookmarks directly →
               </button>
-              <p className="text-xs text-amber-900 mt-1.5">
+              <p className="mt-1.5 text-xs text-amber-200/60">
                 Skips AI extraction — loads current TOC straight into merge step.
               </p>
             </div>
@@ -301,13 +326,15 @@ export function Step1Select({ state, updateState, onNext, onEditExisting }: Prop
               </label>
               <div className="flex flex-wrap gap-1">
                 {state.selectedPages.map((p) => (
-                  <span
+                  <button
+                    type="button"
                     key={p}
                     onClick={() => togglePage(p)}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 bg-indigo-900 text-indigo-300 rounded text-xs cursor-pointer hover:bg-indigo-800"
+                    aria-label={`Remove page ${p} from selection`}
+                    className="inline-flex items-center gap-1 rounded bg-indigo-900 px-2 py-0.5 text-xs text-indigo-300 hover:bg-indigo-800"
                   >
-                    {p} <span className="text-indigo-500">×</span>
-                  </span>
+                    {p} <span className="text-indigo-500" aria-hidden="true">×</span>
+                  </button>
                 ))}
               </div>
             </div>
@@ -315,12 +342,12 @@ export function Step1Select({ state, updateState, onNext, onEditExisting }: Prop
 
           {/* API Key status */}
           <div className="mb-4">
-            <label className="text-xs text-zinc-400 mb-1.5 block">API Key</label>
+            <label className="text-xs text-zinc-400 mb-1.5 block">API Key (optional)</label>
             <div className="flex items-center gap-2 text-xs">
               {state.apiKey ? (
                 <span className="text-green-400">✓ Key set</span>
               ) : (
-                <span className="text-amber-400">⚠ Not set — <button onClick={() => window.dispatchEvent(new CustomEvent('open-settings'))} className="text-indigo-400 hover:underline">open Settings</button></span>
+                <span className="text-zinc-500">Not required for local Magpie</span>
               )}
             </div>
           </div>
@@ -371,7 +398,7 @@ export function Step1Select({ state, updateState, onNext, onEditExisting }: Prop
           <button
             onClick={onNext}
             disabled={state.selectedPages.length === 0}
-            className="w-full py-2.5 bg-green-700 hover:bg-green-600 disabled:bg-zinc-700 disabled:text-zinc-500 rounded-lg text-sm font-medium text-white transition-colors"
+            className="w-full rounded-lg bg-indigo-600 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-500 disabled:bg-zinc-700 disabled:text-zinc-500"
           >
             {state.selectedPages.length === 0
               ? "Select TOC pages"
@@ -396,12 +423,19 @@ export function Step1Select({ state, updateState, onNext, onEditExisting }: Prop
           )}
         </div>
 
+        {thumbnailError && (
+          <div className="flex flex-shrink-0 items-start gap-3 border-b border-red-900 bg-red-950/50 px-4 py-2 text-xs text-red-400" role="alert">
+            <span className="min-w-0 flex-1 break-words">{thumbnailError}</span>
+            <button type="button" onClick={loadMore} disabled={loadingThumbs} className="flex-shrink-0 text-indigo-300 hover:text-indigo-200 disabled:opacity-50">Retry</button>
+          </div>
+        )}
+
         <div ref={gridRef} className="flex-1 overflow-y-auto p-4">
           {!state.filePath ? (
-            <div className="text-center text-zinc-700 mt-20">
-              <div className="text-5xl mb-4">📄</div>
-              <div className="text-sm">Open a PDF or DjVu file to preview pages</div>
-              <div className="text-xs mt-2 text-zinc-800">
+            <div className="mx-auto mt-20 max-w-sm text-center text-zinc-500">
+              <div className="mb-4 text-5xl" aria-hidden="true">📄</div>
+              <div className="text-sm text-zinc-300">Open a PDF or DjVu file to preview pages</div>
+              <div className="mt-2 text-xs leading-relaxed text-zinc-500">
                 Then click the pages that contain the Table of Contents
               </div>
             </div>
@@ -421,6 +455,15 @@ export function Step1Select({ state, updateState, onNext, onEditExisting }: Prop
                         {/* Thumbnail / Preview Area */}
                         <div
                           onClick={() => openPreview(page)}
+                          role="button"
+                          tabIndex={0}
+                          aria-label={`Enlarge page ${page}`}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              void openPreview(page);
+                            }
+                          }}
                           className={`relative cursor-zoom-in rounded-lg overflow-hidden border-2 transition-all duration-200 bg-zinc-900 ${
                             isSelected
                               ? "border-indigo-500 shadow-lg shadow-indigo-900/30"
@@ -511,14 +554,17 @@ export function Step1Select({ state, updateState, onNext, onEditExisting }: Prop
       {/* Full page preview modal */}
       {previewPage !== null && (
         <div
-          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-6"
           onClick={() => {
             setPreviewPage(null);
             setPreviewImage("");
           }}
         >
           <div
-            className="relative max-w-[90vw] max-h-[90vh] bg-zinc-900 border border-zinc-700 rounded-lg overflow-hidden"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Page ${previewPage} preview`}
+            className="relative flex h-[760px] max-h-[calc(100dvh-48px)] w-[1040px] max-w-full flex-col overflow-hidden rounded-xl border border-zinc-700 bg-zinc-900 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-700">
@@ -534,10 +580,15 @@ export function Step1Select({ state, updateState, onNext, onEditExisting }: Prop
               </button>
             </div>
 
-            <div className="w-[80vw] h-[80vh] bg-zinc-950 flex items-center justify-center">
+            <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-zinc-950 p-4">
               {previewLoading && (
                 <div className="absolute text-xs text-zinc-400 bg-zinc-900/90 px-2 py-1 rounded">
                   Loading full page...
+                </div>
+              )}
+              {previewError && !previewLoading && (
+                <div className="max-w-md break-words rounded-lg border border-red-900 bg-red-950/60 p-4 text-center text-xs leading-relaxed text-red-400" role="alert">
+                  Could not render this page: {previewError}
                 </div>
               )}
               {previewImage ? (
@@ -547,7 +598,7 @@ export function Step1Select({ state, updateState, onNext, onEditExisting }: Prop
                   className="max-w-full max-h-full object-contain"
                 />
               ) : (
-                <div className="text-zinc-600 text-sm">No preview available</div>
+                !previewLoading && !previewError && <div className="text-sm text-zinc-500">No preview available</div>
               )}
             </div>
           </div>

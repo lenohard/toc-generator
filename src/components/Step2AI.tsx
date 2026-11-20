@@ -43,9 +43,9 @@ interface AIExtractCacheRecord {
   usage: AIUsage;
 }
 
-const DEFAULT_MODEL = "google/gemini-3-flash";
+const DEFAULT_MODEL = "qwen-cn/qwen3.8-flash";
 const DEFAULT_PROTOCOL = "chat";
-const DEFAULT_BASE_URL = "https://opencode.ai/zen/go";
+const DEFAULT_BASE_URL = "http://127.0.0.1:3425";
 const HISTORY_MAX = 20;
 const EXTRACT_CACHE_PREFIX = "ai_extract_cache:v1";
 
@@ -283,10 +283,9 @@ export function Step2AI({ state, updateState, onNext, onBack, settingsVersion }:
   // Fetch available models
   useEffect(() => {
     const apiKey = localStorage.getItem("ai_gateway_key") || "";
-    if (!apiKey) return;
     setModelsLoading(true);
     setModelsError("");
-    invoke<string[]>("fetch_models", { baseUrl, apiKey })
+    invoke<string[]>("fetch_models", { baseUrl, apiKey: apiKey || null })
       .then(setModels)
       .catch((e) => setModelsError(String(e)))
       .finally(() => setModelsLoading(false));
@@ -368,10 +367,6 @@ export function Step2AI({ state, updateState, onNext, onBack, settingsVersion }:
 
   const runAI = async () => {
     const apiKey = localStorage.getItem("ai_gateway_key") || "";
-    if (!apiKey) {
-      setError("API key not set. Open Settings (⚙) to configure it.");
-      return;
-    }
     if (pageImages.size === 0) {
       setError("No page images loaded yet.");
       return;
@@ -493,19 +488,16 @@ export function Step2AI({ state, updateState, onNext, onBack, settingsVersion }:
           };
 
     try {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (apiKey) {
+        headers.Authorization = `Bearer ${apiKey}`;
+        if (isAnthropic) headers["x-api-key"] = apiKey;
+      }
+      if (isAnthropic) headers["anthropic-version"] = "2023-06-01";
+
       const resp = await fetch(endpoint, {
         method: "POST",
-        headers: isAnthropic
-          ? {
-              "Content-Type": "application/json",
-              "x-api-key": apiKey,
-              "anthropic-version": "2023-06-01",
-              Authorization: `Bearer ${apiKey}`,
-            }
-          : {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${apiKey}`,
-            },
+        headers,
         body: JSON.stringify(requestBody),
       });
 

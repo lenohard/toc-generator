@@ -9,7 +9,7 @@ use std::process::Command;
 pub struct PageThumbnail {
     pub page: u32,
     pub data: String,  // base64-encoded image
-    pub mime: String,  // "image/png" or "image/x-portable-pixmap"
+    pub mime: String,  // "image/png"
 }
 
 /// Get the total page count of a PDF or DjVu file
@@ -90,42 +90,68 @@ pub async fn render_page_thumbnails(
             }
         }
         "djvu" => {
-            let ddjvu = resolve_tool("ddjvu");
             for &page in &pages {
-                let ppm_path = work_dir.join(format!("thumb{:04}.ppm", page));
-                let png_path = work_dir.join(format!("thumb{:04}.png", page));
-                let _ = Command::new(&ddjvu)
-                    .args([
-                        "--format=ppm",
-                        &format!("-page={}", page),
-                        "-size=400x600",
-                        file_path.as_str(),
-                        ppm_path.to_str().unwrap(),
-                    ])
-                    .env("PATH", &tool_search_path())
-                    .output();
-
-                if ppm_path.exists() {
-                    // Convert PPM → PNG using sips (built-in macOS)
-                    let _ = Command::new("sips")
-                        .args([
-                            "-s", "format", "png",
-                            ppm_path.to_str().unwrap(),
-                            "--out", png_path.to_str().unwrap(),
-                        ])
-                        .output();
-                    let src = if png_path.exists() { &png_path } else { &ppm_path };
-                    let mime = if png_path.exists() { "image/png" } else { "image/x-portable-pixmap" };
-                    let bytes = fs::read(src).map_err(|e| e.to_string())?;
-                    let b64 = base64_encode(&bytes);
-                    results.push(PageThumbnail { page, data: b64, mime: mime.to_string() });
-                }
+                let prefix = work_dir.join(format!("thumb{:04}", page));
+                results.push(render_djvu_page(&file_path, page, "400x600", &prefix)?);
             }
         }
         _ => return Err(format!("Unsupported file type: {}", file_type)),
     }
 
     Ok(results)
+}
+
+fn render_djvu_page(file_path: &str, page: u32, size: &str, prefix: &Path) -> Result<PageThumbnail, String> {
+    let ppm_path = prefix.with_extension("ppm");
+    // Do not reuse a PPM left by an earlier rendering attempt.
+    if ppm_path.exists() {
+        fs::remove_file(&ppm_path).map_err(|e| e.to_string())?;
+    }
+    let output = Command::new(resolve_tool("ddjvu"))
+        .args(["--format=ppm", &format!("-page={}", page), &format!("-size={}", size), file_path])
+        .arg(&ppm_path)
+        .env("PATH", tool_search_path())
+        .output()
+        .map_err(|e| format!("ddjvu failed for page {}: {}", page, e))?;
+    if !output.status.success() || fs::metadata(&ppm_path).map(|m| m.len()).unwrap_or(0) == 0 {
+        return Err(format!("ddjvu failed for page {}: {}", page, String::from_utf8_lossy(&output.stderr)));
+    }
+
+    #[cfg(target_os = "macos")]
+    let bytes = {
+        let png_path = prefix.with_extension("png");
+        // Never accept a PNG left by an earlier rendering attempt.
+        if png_path.exists() {
+            fs::remove_file(&png_path).map_err(|e| e.to_string())?;
+        }
+        let output = Command::new("sips")
+            .args(["-s", "format", "png"])
+            .arg(&ppm_path)
+            .arg("--out")
+            .arg(&png_path)
+            .output()
+            .map_err(|e| format!("sips failed for page {}: {}", page, e))?;
+        if !output.status.success() {
+            return Err(format!("sips failed for page {}: {}", page, String::from_utf8_lossy(&output.stderr)));
+        }
+        fs::read(&png_path).map_err(|e| format!("Could not read PNG for page {}: {}", page, e))?
+    };
+    #[cfg(not(target_os = "macos"))]
+    let bytes = {
+        let output = Command::new(resolve_tool("pnmtopng"))
+            .arg(&ppm_path)
+            .env("PATH", tool_search_path())
+            .output()
+            .map_err(|e| format!("pnmtopng failed for page {} (install netpbm): {}", page, e))?;
+        if !output.status.success() {
+            return Err(format!("pnmtopng failed for page {}: {}", page, String::from_utf8_lossy(&output.stderr)));
+        }
+        output.stdout
+    };
+    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err(format!("PNG conversion produced invalid output for page {}", page));
+    }
+    Ok(PageThumbnail { page, data: base64_encode(&bytes), mime: "image/png".to_string() })
 }
 
 fn find_generated_png(dir: &Path, page: u32) -> Option<std::path::PathBuf> {
@@ -214,35 +240,9 @@ pub async fn render_pages_for_ai(
             }
         }
         "djvu" => {
-            let ddjvu = resolve_tool("ddjvu");
             for &page in &pages {
-                let ppm_path = work_dir.join(format!("aipage{:04}.ppm", page));
-                let png_path = work_dir.join(format!("aipage{:04}.png", page));
-                let _ = Command::new(&ddjvu)
-                    .args([
-                        "--format=ppm",
-                        &format!("-page={}", page),
-                        "-size=1200x1800",
-                        file_path.as_str(),
-                        ppm_path.to_str().unwrap(),
-                    ])
-                    .env("PATH", &tool_search_path())
-                    .output();
-
-                if ppm_path.exists() {
-                    let _ = Command::new("sips")
-                        .args([
-                            "-s", "format", "png",
-                            ppm_path.to_str().unwrap(),
-                            "--out", png_path.to_str().unwrap(),
-                        ])
-                        .output();
-                    let src = if png_path.exists() { &png_path } else { &ppm_path };
-                    let mime = if png_path.exists() { "image/png" } else { "image/x-portable-pixmap" };
-                    let bytes = fs::read(src).map_err(|e| e.to_string())?;
-                    let b64 = base64_encode(&bytes);
-                    results.push(PageThumbnail { page, data: b64, mime: mime.to_string() });
-                }
+                let prefix = work_dir.join(format!("aipage{:04}", page));
+                results.push(render_djvu_page(&file_path, page, "1200x1800", &prefix)?);
             }
         }
         _ => return Err(format!("Unsupported file type: {}", file_type)),

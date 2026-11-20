@@ -1,16 +1,17 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { fetch } from "@tauri-apps/plugin-http";
 
 interface Props {
+  active?: boolean;
   onClose: () => void;
   onSaved?: () => void;
 }
 
-const DEFAULT_BASE_URL = "https://opencode.ai/zen/go";
-const DEFAULT_MODEL = "google/gemini-3-flash";
+const DEFAULT_BASE_URL = "http://127.0.0.1:3425";
+const DEFAULT_MODEL = "qwen-cn/qwen3.8-flash";
 
-export function Settings({ onClose, onSaved }: Props) {
+export function Settings({ active = true, onClose, onSaved }: Props) {
   const [baseUrl, setBaseUrl] = useState(
     localStorage.getItem("ai_base_url") || DEFAULT_BASE_URL
   );
@@ -29,25 +30,79 @@ export function Settings({ onClose, onSaved }: Props) {
   const [models, setModels] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState("");
+  const [modelsRevision, setModelsRevision] = useState(0);
+  const [showKey, setShowKey] = useState(false);
+  const [showDiscard, setShowDiscard] = useState(false);
+  const [savedValues, setSavedValues] = useState({ baseUrl, model, apiKey, protocol });
+  const testAbortRef = useRef<AbortController | null>(null);
+  const dirty =
+    baseUrl !== savedValues.baseUrl ||
+    model !== savedValues.model ||
+    apiKey !== savedValues.apiKey ||
+    protocol !== savedValues.protocol;
 
   useEffect(() => {
-    const loadModels = async () => {
+    let active = true;
+    const timer = window.setTimeout(async () => {
       setModelsLoading(true);
       setModelsError("");
       try {
-        const models = await invoke<string[]>("fetch_models", {
+        const nextModels = await invoke<string[]>("fetch_models", {
           baseUrl,
           apiKey: apiKey || null,
         });
-        setModels(models);
+        if (active) setModels(nextModels);
       } catch (e) {
-        setModelsError(String(e));
+        if (active) setModelsError(String(e));
       } finally {
-        setModelsLoading(false);
+        if (active) setModelsLoading(false);
       }
+    }, 450);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
     };
-    loadModels();
-  }, [baseUrl, apiKey]);
+  }, [baseUrl, apiKey, modelsRevision]);
+
+  useEffect(() => () => testAbortRef.current?.abort(), []);
+
+  useEffect(() => {
+    if (!active) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (showDiscard) {
+        setShowDiscard(false);
+        return;
+      }
+      testAbortRef.current?.abort();
+      if (dirty) setShowDiscard(true);
+      else onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [active, dirty, onClose, showDiscard]);
+
+  const invalidateTest = () => {
+    testAbortRef.current?.abort();
+    testAbortRef.current = null;
+    setTesting(false);
+    setTestResult(null);
+  };
+
+  const cancelTest = () => {
+    testAbortRef.current?.abort();
+    testAbortRef.current = null;
+    setTesting(false);
+    setTestResult({ ok: false, msg: "Connection test cancelled." });
+  };
+
+  const requestClose = () => {
+    testAbortRef.current?.abort();
+    testAbortRef.current = null;
+    setTesting(false);
+    if (dirty) setShowDiscard(true);
+    else onClose();
+  };
 
   const handleSave = () => {
     localStorage.setItem("ai_base_url", baseUrl);
@@ -55,18 +110,29 @@ export function Settings({ onClose, onSaved }: Props) {
     localStorage.setItem("ai_gateway_key", apiKey);
     localStorage.setItem("ai_protocol", protocol);
     onSaved?.();
+    setSavedValues({ baseUrl, model, apiKey, protocol });
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
 
   const handleReset = () => {
+    invalidateTest();
     setBaseUrl(DEFAULT_BASE_URL);
     setModel(DEFAULT_MODEL);
     setApiKey("");
     setProtocol("chat");
+    setTestResult(null);
   };
 
   const handleTest = async () => {
+    testAbortRef.current?.abort();
+    const controller = new AbortController();
+    testAbortRef.current = controller;
+    let didTimeout = false;
+    const timeout = window.setTimeout(() => {
+      didTimeout = true;
+      controller.abort();
+    }, 20_000);
     setTesting(true);
     setTestResult(null);
     try {
@@ -98,19 +164,23 @@ export function Settings({ onClose, onSaved }: Props) {
               messages: [{ role: "user", content: "Say OK" }],
               max_tokens: 10,
             };
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (apiKey) {
+        headers.Authorization = `Bearer ${apiKey}`;
+        if (isAnthropic) headers["x-api-key"] = apiKey;
+      }
+      if (isAnthropic) headers["anthropic-version"] = "2023-06-01";
+
       const resp = await fetch(endpoint, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-          ...(isAnthropic
-            ? { "x-api-key": apiKey, "anthropic-version": "2023-06-01" }
-            : {}),
-        },
+        headers,
         body: JSON.stringify(body),
+        signal: controller.signal,
       });
+      if (controller.signal.aborted || testAbortRef.current !== controller) return;
       if (resp.ok) {
         const data = await resp.json();
+        if (controller.signal.aborted || testAbortRef.current !== controller) return;
         let reply: unknown = null;
         if (isAnthropic) {
           const content = data.content as Array<Record<string, unknown>> | undefined;
@@ -123,183 +193,281 @@ export function Settings({ onClose, onSaved }: Props) {
         const text = typeof reply === "string" ? reply : "(no content)";
         setTestResult({ ok: true, msg: `Success: ${text.slice(0, 50)}` });
       } else {
-        setTestResult({ ok: false, msg: `HTTP ${resp.status}: ${await resp.text()}` });
+        const message = await resp.text();
+        if (controller.signal.aborted || testAbortRef.current !== controller) return;
+        setTestResult({ ok: false, msg: `HTTP ${resp.status}: ${message}` });
       }
     } catch (e) {
-      setTestResult({ ok: false, msg: String(e) });
+      if (!controller.signal.aborted) {
+        setTestResult({ ok: false, msg: String(e) });
+      } else if (didTimeout) {
+        setTestResult({ ok: false, msg: "Connection test timed out after 20 seconds." });
+      }
     } finally {
-      setTesting(false);
+      window.clearTimeout(timeout);
+      if (testAbortRef.current === controller) {
+        testAbortRef.current = null;
+        setTesting(false);
+      }
     }
   };
 
+  const inputClass =
+    "h-9 w-full rounded-md border border-zinc-700 bg-zinc-800 px-3 text-xs text-zinc-200 placeholder-zinc-600 transition-colors hover:border-zinc-600 focus:border-indigo-500 focus:outline-none";
+  const endpoint = `${baseUrl}/${
+    protocol === "responses"
+      ? "v1/responses"
+      : protocol === "anthropic"
+        ? "v1/messages"
+        : "v1/chat/completions"
+  }`;
+  const modelOptions = models.includes(model) ? models : [model, ...models];
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="bg-zinc-900 border border-zinc-700 rounded-xl w-full max-w-lg mx-4 shadow-2xl">
-        {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800">
-          <h2 className="text-sm font-semibold text-zinc-200">Settings</h2>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6 backdrop-blur-sm"
+      onClick={requestClose}
+    >
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-title"
+        className="flex h-[700px] max-h-[calc(100dvh-48px)] w-[680px] max-w-full flex-col overflow-hidden rounded-xl border border-zinc-700 bg-zinc-900 shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="flex flex-shrink-0 items-center justify-between border-b border-zinc-800 px-5 py-4">
+          <div>
+            <h2 id="settings-title" className="text-sm font-semibold text-zinc-100">Settings</h2>
+            <p className="mt-0.5 text-xs text-zinc-500">AI gateway and extraction defaults</p>
+          </div>
           <button
-            onClick={onClose}
-            className="text-zinc-500 hover:text-zinc-300 text-lg leading-none"
+            type="button"
+            onClick={requestClose}
+            className="flex h-8 w-8 items-center justify-center rounded-md text-lg text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-40"
+            aria-label="Close settings"
           >
             ✕
           </button>
-        </div>
+        </header>
 
-        {/* Body */}
-        <div className="px-5 py-4 space-y-4">
-          {/* Base URL */}
-          <div>
-            <label className="block text-xs text-zinc-400 mb-1.5">
-              API Base URL
-            </label>
-            <input
-              type="url"
-              value={baseUrl}
-              onChange={(e) => setBaseUrl(e.target.value)}
-              placeholder={DEFAULT_BASE_URL}
-              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-200 focus:outline-none focus:border-indigo-500 placeholder-zinc-600"
-            />
-            <p className="text-xs text-zinc-500 mt-1">
-              OpenAI-compatible endpoint. Default: {DEFAULT_BASE_URL}
-            </p>
-          </div>
-
-          {/* Model */}
-          <div>
-            <label className="block text-xs text-zinc-400 mb-1.5">Model</label>
-            <select
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-200 focus:outline-none focus:border-indigo-500"
-            >
-              {models.length > 0 ? (
-                models.map((id) => (
-                  <option key={id} value={id}>
-                    {id}
-                  </option>
-                ))
-              ) : (
-                <option value={model}>{model}</option>
-              )}
-            </select>
-            {modelsLoading && <p className="text-xs text-zinc-500 mt-1 animate-pulse">Loading models...</p>}
-            {modelsError && (
-              <div className="mt-1">
-                <p className="text-xs text-red-400">{modelsError}</p>
-                <button
-                  onClick={() => {
-                    setModelsError("");
-                    setModelsLoading(true);
-                    invoke<string[]>("fetch_models", { baseUrl, apiKey: apiKey || null })
-                      .then(setModels)
-                      .catch((e) => setModelsError(String(e)))
-                      .finally(() => setModelsLoading(false));
+        <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-5">
+          <section aria-labelledby="connection-heading">
+            <div className="mb-3">
+              <h3 id="connection-heading" className="text-xs font-semibold uppercase tracking-wider text-zinc-300">Connection</h3>
+              <p className="mt-1 text-xs text-zinc-500">Local and hosted OpenAI-compatible gateways are supported.</p>
+            </div>
+            <div className="space-y-4 rounded-lg border border-zinc-800 bg-zinc-950/30 p-4">
+              <div>
+                <label htmlFor="settings-base-url" className="mb-1.5 block text-xs font-medium text-zinc-300">API Base URL</label>
+                <input
+                  id="settings-base-url"
+                  type="url"
+                  value={baseUrl}
+                  onChange={(event) => {
+                    invalidateTest();
+                    setBaseUrl(event.target.value);
                   }}
-                  className="text-xs text-indigo-400 hover:underline mt-0.5"
-                >
-                  Retry
-                </button>
+                  placeholder={DEFAULT_BASE_URL}
+                  spellCheck={false}
+                  className={inputClass}
+                />
               </div>
-            )}
-            {models.length > 0 && <p className="text-xs text-zinc-500 mt-1">{models.length} models available</p>}
-            <p className="text-xs text-zinc-500 mt-1">
-              Model used for TOC extraction
-            </p>
-          </div>
 
-          {/* Protocol */}
-          <div>
-            <label className="block text-xs text-zinc-400 mb-1.5">
-              API Protocol
-            </label>
-            <select
-              value={protocol}
-              onChange={(e) =>
-                setProtocol(e.target.value as "chat" | "responses" | "anthropic")
-              }
-              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-200 focus:outline-none focus:border-indigo-500"
-            >
-              <option value="chat">chat-completions (/v1/chat/completions)</option>
-              <option value="responses">openai-responses (/v1/responses)</option>
-              <option value="anthropic">anthropic-messages (/v1/messages)</option>
-            </select>
-            <p className="text-xs text-zinc-500 mt-1">
-              Request protocol used for AI extraction. The messages endpoint uses
-              Anthropic-style auth (x-api-key) — some gateways (e.g. opencode
-              zen/go) also require a bare model ID (no provider prefix).
-            </p>
-          </div>
+              <div>
+                <label htmlFor="settings-protocol" className="mb-1.5 block text-xs font-medium text-zinc-300">API Protocol</label>
+                <select
+                  id="settings-protocol"
+                  value={protocol}
+                  onChange={(event) => {
+                    invalidateTest();
+                    setProtocol(event.target.value as "chat" | "responses" | "anthropic");
+                  }}
+                  className={inputClass}
+                >
+                  <option value="chat">Chat Completions · /v1/chat/completions</option>
+                  <option value="responses">OpenAI Responses · /v1/responses</option>
+                  <option value="anthropic">Anthropic Messages · /v1/messages</option>
+                </select>
+                <p className="mt-1.5 text-xs leading-relaxed text-zinc-500">
+                  Messages uses x-api-key when a key is provided. Some gateways require a bare model ID without a provider prefix.
+                </p>
+              </div>
 
-          {/* API Key */}
-          <div>
-            <label className="block text-xs text-zinc-400 mb-1.5">
-              API Key
-            </label>
-            <input
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder="sk-..."
-              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-200 focus:outline-none focus:border-indigo-500 placeholder-zinc-600"
-            />
-            <p className="text-xs text-zinc-500 mt-1">
-              API key for authentication (messages protocol uses x-api-key)
-            </p>
-          </div>
+              <div>
+                <label htmlFor="settings-api-key" className="mb-1.5 block text-xs font-medium text-zinc-300">
+                  API Key <span className="font-normal text-zinc-500">(optional for local gateways)</span>
+                </label>
+                <div className="relative">
+                  <input
+                    id="settings-api-key"
+                    type={showKey ? "text" : "password"}
+                    value={apiKey}
+                    onChange={(event) => {
+                      invalidateTest();
+                      setApiKey(event.target.value);
+                    }}
+                    placeholder="sk-..."
+                    autoComplete="off"
+                    spellCheck={false}
+                    className={`${inputClass} pr-16`}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowKey((visible) => !visible)}
+                    className="absolute inset-y-0 right-0 px-3 text-xs text-zinc-500 hover:text-zinc-200"
+                    aria-label={showKey ? "Hide API key" : "Show API key"}
+                  >
+                    {showKey ? "Hide" : "Show"}
+                  </button>
+                </div>
+              </div>
 
-          {/* Test connection */}
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleTest}
-              disabled={testing || !apiKey}
-              className="px-4 py-1.5 text-xs bg-emerald-700 hover:bg-emerald-600 disabled:bg-zinc-700 disabled:text-zinc-500 text-white rounded-lg font-medium"
-            >
-              {testing ? "Testing..." : "Test Connection"}
-            </button>
-            {testResult && (
-              <span className={`text-xs ${testResult.ok ? "text-green-400" : "text-red-400"}`}>
-                {testResult.msg}
-              </span>
-            )}
-          </div>
+              <div className="rounded-md bg-zinc-950 px-3 py-2.5 text-xs">
+                <div className="mb-1 text-zinc-500">Request endpoint</div>
+                <div className="select-text break-all font-mono leading-relaxed text-zinc-400">{endpoint}</div>
+              </div>
+            </div>
+          </section>
 
-          {/* Endpoint preview */}
-          <div className="bg-zinc-800 rounded-lg p-3 text-xs">
-            <span className="text-zinc-500">Requests go to: </span>
-            <span className="text-zinc-300 break-all">
-              {baseUrl}/{protocol === "responses" ? "v1/responses" : protocol === "anthropic" ? "v1/messages" : "v1/chat/completions"}
-            </span>
-          </div>
+          <section aria-labelledby="model-heading">
+            <div className="mb-3 flex items-end justify-between gap-3">
+              <div>
+                <h3 id="model-heading" className="text-xs font-semibold uppercase tracking-wider text-zinc-300">Extraction model</h3>
+                <p className="mt-1 text-xs text-zinc-500">Used for table-of-contents vision extraction.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setModelsRevision((revision) => revision + 1)}
+                disabled={modelsLoading}
+                className="flex-shrink-0 text-xs text-indigo-400 hover:text-indigo-300 disabled:opacity-50"
+              >
+                {modelsLoading ? "Loading…" : "Refresh models"}
+              </button>
+            </div>
+            <div className="rounded-lg border border-zinc-800 bg-zinc-950/30 p-4">
+              <label htmlFor="settings-model" className="mb-1.5 block text-xs font-medium text-zinc-300">Model</label>
+              <select
+                id="settings-model"
+                value={model}
+                onChange={(event) => {
+                  invalidateTest();
+                  setModel(event.target.value);
+                }}
+                className={inputClass}
+              >
+                {modelOptions.map((id) => <option key={id} value={id}>{id}</option>)}
+              </select>
+              <div className="mt-2 min-h-4 text-xs" aria-live="polite">
+                {modelsLoading && <span className="text-zinc-500">Refreshing available models…</span>}
+                {!modelsLoading && !modelsError && models.length > 0 && (
+                  <span className="text-zinc-500">{models.length} models available</span>
+                )}
+                {modelsError && (
+                  <div className="flex items-start gap-2 text-red-400">
+                    <span className="min-w-0 flex-1 break-words">{modelsError}</span>
+                    <button
+                      type="button"
+                      onClick={() => setModelsRevision((revision) => revision + 1)}
+                      className="flex-shrink-0 text-indigo-400 hover:text-indigo-300"
+                    >
+                      Retry
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
+
+          <section aria-labelledby="test-heading" className="pb-1">
+            <h3 id="test-heading" className="mb-3 text-xs font-semibold uppercase tracking-wider text-zinc-300">Connection test</h3>
+            <div className="rounded-lg border border-zinc-800 bg-zinc-950/30 p-4">
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={handleTest}
+                  disabled={testing || !baseUrl || !model}
+                  className="rounded-md bg-emerald-700 px-4 py-2 text-xs font-medium text-white hover:bg-emerald-600 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-500"
+                >
+                  {testing ? "Testing…" : "Test current settings"}
+                </button>
+                {testing && (
+                  <button
+                    type="button"
+                    onClick={cancelTest}
+                    className="rounded-md px-3 py-2 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+                  >
+                    Cancel test
+                  </button>
+                )}
+                <span className="text-xs text-zinc-500">Tests edits before saving them.</span>
+              </div>
+              {testResult && (
+                <div
+                  className={`mt-3 max-h-24 overflow-y-auto rounded-md border px-3 py-2 text-xs leading-relaxed break-words ${
+                    testResult.ok
+                      ? "border-emerald-900 bg-emerald-950/50 text-emerald-400"
+                      : "border-red-900 bg-red-950/50 text-red-400"
+                  }`}
+                  role="status"
+                >
+                  {testResult.msg}
+                </div>
+              )}
+            </div>
+          </section>
         </div>
 
-        {/* Footer */}
-        <div className="flex items-center justify-between px-5 py-4 border-t border-zinc-800">
+        <footer className="flex flex-shrink-0 items-center justify-between border-t border-zinc-800 px-5 py-4">
           <button
+            type="button"
             onClick={handleReset}
-            className="text-xs text-zinc-500 hover:text-zinc-300"
+            className="rounded-md px-2 py-1.5 text-xs text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300 disabled:opacity-40"
           >
             Reset to defaults
           </button>
           <div className="flex items-center gap-2">
-            {saved && (
-              <span className="text-xs text-green-400">Saved ✓</span>
-            )}
+            <span className={`mr-1 text-xs ${saved && !dirty ? "text-emerald-400" : "text-zinc-500"}`} aria-live="polite">
+              {saved && !dirty ? "Saved ✓" : dirty ? "Unsaved changes" : ""}
+            </span>
             <button
-              onClick={onClose}
-              className="px-3 py-1.5 text-xs text-zinc-400 hover:text-zinc-200 rounded-lg"
+              type="button"
+              onClick={requestClose}
+              className="rounded-md px-3 py-2 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 disabled:opacity-40"
             >
               Cancel
             </button>
             <button
+              type="button"
               onClick={handleSave}
-              className="px-4 py-1.5 text-xs bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium"
+              disabled={!dirty || testing || !baseUrl || !model}
+              className="min-w-20 rounded-md bg-indigo-600 px-4 py-2 text-xs font-medium text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-500"
             >
               Save
             </button>
           </div>
+        </footer>
+      </section>
+
+      {showDiscard && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 p-6" onClick={() => setShowDiscard(false)}>
+          <section
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="discard-settings-title"
+            className="flex h-[220px] w-[420px] max-w-full flex-col rounded-xl border border-zinc-700 bg-zinc-900 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex-1 px-5 py-5">
+              <h3 id="discard-settings-title" className="text-sm font-semibold text-zinc-100">Discard unsaved changes?</h3>
+              <p className="mt-2 text-xs leading-relaxed text-zinc-500">Your edited gateway, protocol, model, and key have not been saved.</p>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-zinc-800 px-5 py-4">
+              <button type="button" autoFocus onClick={() => setShowDiscard(false)} className="rounded-md px-3 py-2 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">Keep editing</button>
+              <button type="button" onClick={onClose} className="rounded-md bg-red-700 px-4 py-2 text-xs font-medium text-white hover:bg-red-600">Discard changes</button>
+            </div>
+          </section>
         </div>
-      </div>
+      )}
     </div>
   );
 }
